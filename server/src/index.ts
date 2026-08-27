@@ -6,7 +6,7 @@ import { authRouter } from './routes/auth.js';
 import { walletRouter } from './routes/wallets.js';
 import { depositRouter } from './routes/deposits.js';
 import { webhookRouter } from './routes/webhooks.js';
-import { loadUser } from './middleware/auth.js';
+import { loadUser, requireAdmin } from './middleware/auth.js';
 import { reconcile } from './lib/ledger.js';
 import { getProvider } from './providers/index.js';
 import { pool } from './db/index.js';
@@ -41,10 +41,11 @@ app.get('/health', async (_req, res) => {
 });
 
 /**
- * Proof that the books balance. Exposed so it can be scraped by a monitor;
- * in production put this behind an admin guard.
+ * Proof that the books balance. Scrape it with a monitor and alert on
+ * `ok: false`. Behind ADMIN_TOKEN because it reports every account's position,
+ * not the caller's own.
  */
-app.get('/admin/reconciliation', async (_req, res) => {
+app.get('/admin/reconciliation', requireAdmin, async (_req, res) => {
   const report = await reconcile();
   res.status(report.ok ? 200 : 500).json(report);
 });

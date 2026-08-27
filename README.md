@@ -60,7 +60,7 @@ the default `PAYMENT_PROVIDER=mock` deposits settle instantly, so the whole app
 is usable without a Stripe key or a webhook tunnel.
 
 ```bash
-npm test          # 38 tests, including concurrency and DB-level invariants
+npm test          # 42 tests, including concurrency and DB-level invariants
 npm run typecheck
 ```
 
@@ -146,7 +146,17 @@ crossing transfers between two users complete with no failures.
 **Reconciliation.** `GET /admin/reconciliation` proves the books: every cached
 balance equals the sum of its postings, every journal entry sums to zero, and
 every currency nets to zero across all accounts. Run it on a schedule and alert
-on `ok: false`. Put it behind an admin guard before this is public.
+on `ok: false`:
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:4000/admin/reconciliation
+```
+
+It reports every account's position, not the caller's own, so it sits behind
+`ADMIN_TOKEN` rather than a user session. The guard fails closed — with no
+`ADMIN_TOKEN` set the endpoint refuses every request, because a deployment that
+forgot to configure it should break loudly rather than serve the books to
+anyone who guesses the URL.
 
 **Idempotency.** Every money-moving endpoint requires an `Idempotency-Key`.
 A retry with the same key replays the original response and moves nothing; the

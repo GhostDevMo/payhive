@@ -277,3 +277,55 @@ describe('books', () => {
     expect(report.currencyTotals).toEqual([{ currency: 'USD', total: 0n }]);
   });
 });
+
+describe('admin endpoints', () => {
+  /**
+   * requireAdmin reads process.env per request, so these set the token here
+   * rather than depending on a .env file that CI does not have.
+   */
+  const withToken = async (token: string | undefined, run: () => Promise<void>) => {
+    const previous = process.env.ADMIN_TOKEN;
+    if (token === undefined) delete process.env.ADMIN_TOKEN;
+    else process.env.ADMIN_TOKEN = token;
+    try {
+      await run();
+    } finally {
+      if (previous === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = previous;
+    }
+  };
+
+  it('refuses the books to a caller with no token', async () => {
+    await withToken('the-real-token', async () => {
+      const response = await request(app).get('/admin/reconciliation').expect(401);
+      expect(response.body.error.code).toBe('unauthenticated');
+      expect(response.body).not.toHaveProperty('currencyTotals');
+    });
+  });
+
+  it('refuses the books to a caller with the wrong token', async () => {
+    await withToken('the-real-token', async () => {
+      await request(app)
+        .get('/admin/reconciliation')
+        .set('Authorization', 'Bearer not-the-real-token')
+        .expect(401);
+    });
+  });
+
+  it('serves the books to a caller with the right token', async () => {
+    await withToken('the-real-token', async () => {
+      const response = await request(app)
+        .get('/admin/reconciliation')
+        .set('Authorization', 'Bearer the-real-token')
+        .expect(200);
+      expect(response.body.ok).toBe(true);
+    });
+  });
+
+  it('fails closed when no token is configured at all', async () => {
+    await withToken(undefined, async () => {
+      const response = await request(app).get('/admin/reconciliation').expect(503);
+      expect(response.body.error.code).toBe('admin_not_configured');
+    });
+  });
+});
