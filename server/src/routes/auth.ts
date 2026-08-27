@@ -13,6 +13,7 @@ import {
 } from '../lib/auth.js';
 import { requireAuth } from '../middleware/auth.js';
 import { openWallet } from '../lib/wallet.js';
+import { claimHandle, HandleError } from '../lib/handle.js';
 
 export const authRouter = Router();
 
@@ -68,7 +69,13 @@ authRouter.post('/signup', async (req, res) => {
   const session = await createSession(created.id);
   res.cookie(SESSION_COOKIE, session.id, { ...cookieOptions, expires: session.expiresAt });
   res.status(201).json({
-    user: { id: created.id, payhiveId: created.payhiveId, displayName: created.displayName, email },
+    user: {
+      id: created.id,
+      payhiveId: created.payhiveId,
+      handle: null,
+      displayName: created.displayName,
+      email,
+    },
   });
 });
 
@@ -100,6 +107,7 @@ authRouter.post('/login', async (req, res) => {
     user: {
       id: user.id,
       payhiveId: user.payhiveId,
+      handle: user.handle ?? null,
       displayName: user.displayName,
       email: user.email,
       kycStatus: user.kycStatus,
@@ -115,4 +123,35 @@ authRouter.post('/logout', async (req, res) => {
 
 authRouter.get('/me', requireAuth, (req, res) => {
   res.json({ user: req.user });
+});
+
+// ---------------------------------------------------------------------------
+// Handle
+// ---------------------------------------------------------------------------
+
+const handleSchema = z.object({ handle: z.string().min(1).max(64) });
+
+/**
+ * Claim or change the caller's payment handle.
+ *
+ * The generated PayHive ID is untouched by this and keeps working forever; a
+ * handle is an additional way to be paid, not a replacement for the first one.
+ */
+authRouter.put('/me/handle', requireAuth, async (req, res) => {
+  const parsed = handleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { code: 'invalid_request', message: 'A handle is required.' } });
+    return;
+  }
+
+  try {
+    const claimed = await claimHandle(req.user!.id, parsed.data.handle);
+    res.json({ handle: claimed.handle });
+  } catch (error) {
+    if (error instanceof HandleError) {
+      res.status(error.status).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    throw error;
+  }
 });

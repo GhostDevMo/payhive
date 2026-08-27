@@ -9,6 +9,7 @@ import {
   post,
 } from './ledger.js';
 import { toJSON, type Currency, type Money } from './money.js';
+import { resolvePayee } from './handle.js';
 
 /**
  * Wallet operations.
@@ -132,8 +133,12 @@ export async function deposit(params: DepositParams): Promise<{ transactionId: s
 
 export interface TransferParams {
   fromUserId: string;
-  /** Public PayHive ID of the recipient, e.g. "PH7K4M2Q9X". */
-  toPayhiveId: string;
+  /**
+   * What the sender typed: a PayHive ID like "PH7K4M2Q9X" or a handle like
+   * "alice.dev". Resolved by resolvePayee, so the sender does not have to know
+   * which kind of address they were given.
+   */
+  to: string;
   amount: Money;
   note?: string;
 }
@@ -162,10 +167,10 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
     const sender = await loadUser(tx, { id: params.fromUserId });
     if (!sender) throw new WalletError('Sender not found', 'sender_not_found', 404);
 
-    const recipient = await loadUser(tx, { payhiveId: params.toPayhiveId.toUpperCase() });
+    const recipient = await resolvePayee(tx, params.to);
     if (!recipient) {
       throw new WalletError(
-        `No PayHive user with ID ${params.toPayhiveId}`,
+        `No PayHive user with ID or handle ${params.to}`,
         'recipient_not_found',
         404,
       );

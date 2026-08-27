@@ -35,7 +35,7 @@ describe('ledger invariants', () => {
 
     await transfer({
       fromUserId: alice.id,
-      toPayhiveId: bob.payhiveId,
+      to: bob.payhiveId,
       amount: money(25_50n, 'USD'),
       note: 'lunch',
     });
@@ -52,7 +52,7 @@ describe('ledger invariants', () => {
 
     await transfer({
       fromUserId: alice.id,
-      toPayhiveId: bob.payhiveId,
+      to: bob.payhiveId,
       amount: money(10_00n, 'EUR'),
     });
 
@@ -67,7 +67,7 @@ describe('ledger invariants', () => {
     await expect(
       transfer({
         fromUserId: alice.id,
-        toPayhiveId: bob.payhiveId,
+        to: bob.payhiveId,
         amount: money(10_01n, 'USD'),
       }),
     ).rejects.toThrow(WalletError);
@@ -82,7 +82,7 @@ describe('ledger invariants', () => {
     const alice = await createUser('Alice');
     await fund(alice.id, 10_00n);
     await expect(
-      transfer({ fromUserId: alice.id, toPayhiveId: alice.payhiveId, amount: money(1_00n, 'USD') }),
+      transfer({ fromUserId: alice.id, to: alice.payhiveId, amount: money(1_00n, 'USD') }),
     ).rejects.toThrow(/yourself/);
   });
 
@@ -167,7 +167,7 @@ describe('ledger invariants', () => {
     for (let i = 0; i < 10; i += 1) {
       await transfer({
         fromUserId: alice.id,
-        toPayhiveId: bob.payhiveId,
+        to: bob.payhiveId,
         amount: money(7_13n, 'USD'), // deliberately not a round number
       });
     }
@@ -224,7 +224,7 @@ describe('concurrency', () => {
       Array.from({ length: attempts }, () =>
         transfer({
           fromUserId: alice.id,
-          toPayhiveId: bob.payhiveId,
+          to: bob.payhiveId,
           amount: money(10_00n, 'USD'),
         }),
       ),
@@ -251,10 +251,10 @@ describe('concurrency', () => {
     const rounds = 20;
     const results = await Promise.allSettled([
       ...Array.from({ length: rounds }, () =>
-        transfer({ fromUserId: alice.id, toPayhiveId: bob.payhiveId, amount: money(1_00n, 'USD') }),
+        transfer({ fromUserId: alice.id, to: bob.payhiveId, amount: money(1_00n, 'USD') }),
       ),
       ...Array.from({ length: rounds }, () =>
-        transfer({ fromUserId: bob.id, toPayhiveId: alice.payhiveId, amount: money(1_00n, 'USD') }),
+        transfer({ fromUserId: bob.id, to: alice.payhiveId, amount: money(1_00n, 'USD') }),
       ),
     ]);
 

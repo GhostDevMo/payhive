@@ -4,8 +4,17 @@ import { Logo } from './Logo';
 import SendMoney from './SendMoney';
 import TopUp from './TopUp';
 import History from './History';
+import HandleCard from './HandleCard';
 
-export default function Dashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
+export default function Dashboard({
+  user,
+  onSignOut,
+  onUserChanged,
+}: {
+  user: User;
+  onSignOut: () => void;
+  onUserChanged: (user: User) => void;
+}) {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [transactions, setTransactions] = useState<TransactionRow[]>([]);
   const [active, setActive] = useState<string>('USD');
@@ -34,7 +43,10 @@ export default function Dashboard({ user, onSignOut }: { user: User; onSignOut: 
   const activeWallet = wallets.find((w) => w.currency === active);
 
   async function copyId() {
-    await navigator.clipboard.writeText(user.payhiveId).catch(() => undefined);
+    // Copy whichever address is on screen, so what is pasted matches what was read.
+    await navigator.clipboard
+      .writeText(user.handle ? `@${user.handle}` : user.payhiveId)
+      .catch(() => undefined);
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   }
@@ -52,10 +64,10 @@ export default function Dashboard({ user, onSignOut }: { user: User; onSignOut: 
             <p className="text-sm font-medium text-slate-200">{user.displayName}</p>
             <button
               onClick={copyId}
-              title="Copy your PayHive ID"
+              title="Copy your payment address"
               className="tnum font-mono text-xs text-slate-500 transition hover:text-hive-500"
             >
-              {copied ? 'Copied' : user.payhiveId}
+              {copied ? 'Copied' : user.handle ? `@${user.handle}` : user.payhiveId}
             </button>
           </div>
           <button onClick={onSignOut} className="btn-ghost !px-3 !py-1.5 text-xs">
@@ -94,10 +106,11 @@ export default function Dashboard({ user, onSignOut }: { user: User; onSignOut: 
               <span className="ml-2 text-lg font-medium text-slate-500">{active}</span>
             </p>
           )}
-          <p className="mt-3 text-sm text-slate-500">
-            Anyone can pay you with your PayHive ID{' '}
-            <span className="tnum font-mono text-slate-300">{user.payhiveId}</span>
-          </p>
+          <HandleCard
+            payhiveId={user.payhiveId}
+            handle={user.handle}
+            onChanged={(handle) => onUserChanged({ ...user, handle })}
+          />
         </div>
       </section>
 

@@ -104,6 +104,7 @@ export async function createSession(userId: string): Promise<{ id: string; expir
 export interface SessionUser {
   id: string;
   payhiveId: string;
+  handle: string | null;
   email: string;
   displayName: string;
   kycStatus: string;
@@ -114,6 +115,7 @@ export async function resolveSession(sessionId: string): Promise<SessionUser | n
     .select({
       id: users.id,
       payhiveId: users.payhiveId,
+      handle: users.handle,
       email: users.email,
       displayName: users.displayName,
       kycStatus: users.kycStatus,

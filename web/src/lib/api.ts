@@ -22,7 +22,10 @@ export interface MoneyValue {
 
 export interface User {
   id: string;
+  /** Permanent address for this wallet. Never changes. */
   payhiveId: string;
+  /** Optional chosen alias that resolves to the same wallet. */
+  handle?: string | null;
   email: string;
   displayName: string;
   kycStatus?: string;
@@ -108,10 +111,14 @@ export const api = {
   openWallet: (currency: string) =>
     call<{ wallet: Wallet }>('/wallets', { method: 'POST', body: { currency } }),
 
-  lookupRecipient: (payhiveId: string) =>
-    call<{ recipient: { payhiveId: string; displayName: string } }>(
-      `/wallets/recipients/${encodeURIComponent(payhiveId)}`,
+  /** Accepts a PayHive ID or a handle — the payer should not have to know which. */
+  lookupRecipient: (address: string) =>
+    call<{ recipient: { payhiveId: string; handle: string | null; displayName: string } }>(
+      `/wallets/recipients/${encodeURIComponent(address)}`,
     ),
+
+  setHandle: (handle: string) =>
+    call<{ handle: string }>('/auth/me/handle', { method: 'PUT', body: { handle } }),
 
   deposit: (input: { amount: string; currency: string }, key: string) =>
     call<{ deposit: { status: string; transactionId?: string; clientSecret?: string | null } }>(
@@ -126,7 +133,7 @@ export const api = {
     call<{
       transfer: {
         transactionId: string;
-        to: { payhiveId: string; displayName: string };
+        to: { payhiveId: string; handle?: string | null; displayName: string };
         amount: MoneyValue;
       };
     }>('/wallets/transfers', { method: 'POST', body: input, idempotencyKey: key }),

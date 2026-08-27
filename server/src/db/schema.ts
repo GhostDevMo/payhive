@@ -33,8 +33,18 @@ export const users = pgTable(
   'users',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    /** Public handle used to send money to this user, e.g. "PH7K4M2Q9X". */
+    /** Permanent public address for this wallet, e.g. "PH7K4M2Q9X". Never changes. */
     payhiveId: text('payhive_id').notNull(),
+    /** Optional user-chosen alias, e.g. "alice.dev". Resolves to the same wallet. */
+    handle: text('handle'),
+    /**
+     * The handle folded to the form uniqueness is enforced on: separators
+     * stripped and lookalike characters collapsed, so `a1ice` cannot be
+     * registered alongside `alice`. See lib/handle.ts.
+     */
+    handleSkeleton: text('handle_skeleton'),
+    /** When the handle last changed, for the change cooldown. */
+    handleUpdatedAt: timestamp('handle_updated_at', { withTimezone: true }),
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
     displayName: text('display_name').notNull(),
@@ -49,8 +59,29 @@ export const users = pgTable(
   (t) => ({
     emailIdx: uniqueIndex('users_email_key').on(t.email),
     payhiveIdIdx: uniqueIndex('users_payhive_id_key').on(t.payhiveId),
+    // Uniqueness lives on the skeleton, not the handle: two names that look
+    // alike must not both exist. Postgres treats NULLs as distinct, so users
+    // without a handle do not collide with each other.
+    handleSkeletonIdx: uniqueIndex('users_handle_skeleton_key').on(t.handleSkeleton),
   }),
 );
+
+/**
+ * Handles that have been released and may never be claimed again.
+ *
+ * A handle someone has shared is an address other people have written down.
+ * Letting it resolve to a different person later turns a stale contact into a
+ * payment to a stranger, so released names are burned rather than recycled.
+ */
+export const retiredHandles = pgTable('retired_handles', {
+  /** The folded form, matching users.handle_skeleton. */
+  skeleton: text('skeleton').primaryKey(),
+  /** The handle as it was written, kept for support and audit. */
+  handle: text('handle').notNull(),
+  /** Who released it. Null for names retired by us rather than by a user. */
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  retiredAt: timestamp('retired_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const sessions = pgTable(
   'sessions',

@@ -60,7 +60,7 @@ the default `PAYMENT_PROVIDER=mock` deposits settle instantly, so the whole app
 is usable without a Stripe key or a webhook tunnel.
 
 ```bash
-npm test          # 42 tests, including concurrency and DB-level invariants
+npm test          # 67 tests, including concurrency and DB-level invariants
 npm run typecheck
 ```
 
@@ -256,6 +256,46 @@ web/
 
 PayHive IDs use Crockford base32 — no I, L, O or U — because people read these
 aloud and retype them.
+
+---
+
+## Handles
+
+A user can claim a handle — `@alice.pay` — and be paid by it. The generated
+PayHive ID is untouched and keeps working forever: a handle is an extra address,
+not a replacement, so choosing one never invalidates an address already given
+out. `POST /wallets/transfers` accepts either in `to`.
+
+Everything difficult here is about a name being read by a human who is deciding
+whether to trust it.
+
+**Uniqueness is enforced on a skeleton, not on the text.** The handle is folded
+before comparison: case dropped, `.`, `_` and `-` removed, and lookalike
+characters collapsed (`o`/`0`, `l`/`i`/`1`, `s`/`5`, `b`/`8`, `g`/`9`, `z`/`2`).
+So `alice`, `AL.ICE` and `a1ice` are one name and only one of them can exist.
+Without this, an attacker registers the twin of a handle and collects the
+payments that miss. The generated IDs already dodge this by dropping ambiguous
+letters; free text has to earn it back.
+
+The folding is deliberately conservative. `rn` → `m` is a genuine confusable but
+is not folded, because it would also collide `corner` with `comer`, and refusing
+honest names is its own kind of failure.
+
+**Released handles are never reissued.** Changing a handle writes the old one to
+`retired_handles`, where it stays. A handle someone has shared is an address
+other people wrote down; letting it later resolve to a different person turns a
+stale contact into a payment to a stranger. Failing to find a handle is
+recoverable — paying the wrong person is not. A change is allowed once every 30
+days.
+
+**Reserved names cannot be claimed**, checked against the skeleton so `pay.hive`
+and `payh1ve` are covered by one entry. Nor can anything shaped like a generated
+PayHive ID.
+
+**History records the resolved PayHive ID**, never the handle, so changing a
+handle cannot rewrite what a past transaction says. The send screen shows the
+resolved ID beside the payee's name for the same reason: the permanent
+identifier is the thing that cannot be chosen to imitate someone else.
 
 ---
 

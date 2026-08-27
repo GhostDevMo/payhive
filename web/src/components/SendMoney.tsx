@@ -23,25 +23,33 @@ export default function SendMoney({
   const [to, setTo] = useState('');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
-  const [recipient, setRecipient] = useState<{ payhiveId: string; displayName: string } | null>(null);
+  const [recipient, setRecipient] = useState<{
+    payhiveId: string;
+    handle: string | null;
+    displayName: string;
+  } | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idempotencyKey = useRef<string | null>(null);
 
-  // Debounced recipient lookup as the ID is typed.
+  // Debounced recipient lookup as the address is typed. The address may be a
+  // PayHive ID or a handle, so the minimum length is the shortest handle, not
+  // the fixed length of an ID — and the case is left as typed, because the
+  // server matches a handle case-insensitively and uppercasing it here would
+  // only make what the payer sees disagree with what they wrote.
   useEffect(() => {
-    const candidate = to.trim().toUpperCase();
+    const candidate = to.trim().replace(/^@/, '');
     setRecipient(null);
     setLookupError(null);
-    if (candidate.length < 10) return;
+    if (candidate.length < 3) return;
 
     const timer = setTimeout(() => {
       api
         .lookupRecipient(candidate)
         .then((r) => setRecipient(r.recipient))
-        .catch(() => setLookupError('No PayHive user with that ID.'));
+        .catch(() => setLookupError('No PayHive user with that ID or handle.'));
     }, 300);
 
     return () => clearTimeout(timer);
@@ -88,14 +96,14 @@ export default function SendMoney({
       <form onSubmit={submit} className="mt-4 space-y-3.5">
         <div>
           <label className="label" htmlFor="recipient">
-            Recipient PayHive ID
+            Recipient PayHive ID or handle
           </label>
           <input
             id="recipient"
             className="field tnum font-mono uppercase"
             value={to}
             onChange={(e) => setTo(e.target.value.toUpperCase())}
-            placeholder="PH7K4M2Q9X"
+            placeholder="PH7K4M2Q9X or @handle"
             maxLength={10}
             autoComplete="off"
             spellCheck={false}
@@ -103,8 +111,12 @@ export default function SendMoney({
           />
           <div className="mt-1.5 min-h-[1.25rem] text-xs">
             {recipient && (
+              // The resolved PayHive ID is shown next to the name on purpose. A
+              // handle can be chosen to resemble someone else's; the permanent
+              // ID cannot, so this is the payer's chance to notice.
               <span className="text-emerald-400">
-                Paying <strong className="font-semibold">{recipient.displayName}</strong>
+                Paying <strong className="font-semibold">{recipient.displayName}</strong>{' '}
+                <span className="tnum font-mono text-slate-500">{recipient.payhiveId}</span>
               </span>
             )}
             {lookupError && <span className="text-red-400">{lookupError}</span>}

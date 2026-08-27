@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { idempotent } from '../middleware/idempotency.js';
 import { history, listWallets, openWallet, transfer, withdraw, WalletError } from '../lib/wallet.js';
 import { MoneyError, isSupportedCurrency, parseDecimal, SUPPORTED_CURRENCIES } from '../lib/money.js';
+import { resolvePayee } from '../lib/handle.js';
 
 export const walletRouter = Router();
 
@@ -37,22 +38,24 @@ walletRouter.post('/', async (req, res) => {
 // Recipient lookup — so the UI can confirm who is about to be paid.
 // ---------------------------------------------------------------------------
 
-walletRouter.get('/recipients/:payhiveId', async (req, res) => {
-  const payhiveId = String(req.params.payhiveId ?? '').toUpperCase();
-  const rows = await db
-    .select({ payhiveId: users.payhiveId, displayName: users.displayName })
-    .from(users)
-    .where(eq(users.payhiveId, payhiveId))
-    .limit(1);
+walletRouter.get('/recipients/:address', async (req, res) => {
+  const found = await resolvePayee(db, String(req.params.address ?? ''));
 
-  const found = rows[0];
   if (!found) {
-    res.status(404).json({ error: { code: 'recipient_not_found', message: 'No PayHive user with that ID.' } });
+    res.status(404).json({
+      error: { code: 'recipient_not_found', message: 'No PayHive user with that ID or handle.' },
+    });
     return;
   }
-  // Only the display name is returned. Confirming a payee should not be a way
-  // to harvest email addresses from a PayHive ID.
-  res.json({ recipient: found });
+  // Only the public addresses and the display name. Confirming a payee should
+  // not be a way to harvest email addresses from a PayHive ID.
+  res.json({
+    recipient: {
+      payhiveId: found.payhiveId,
+      handle: found.handle,
+      displayName: found.displayName,
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -78,7 +81,7 @@ walletRouter.post('/transfers', idempotent('POST /wallets/transfers'), async (re
     const amount = parseDecimal(parsed.data.amount, parsed.data.currency);
     const result = await transfer({
       fromUserId: req.user!.id,
-      toPayhiveId: parsed.data.to,
+      to: parsed.data.to,
       amount,
       note: parsed.data.note,
     });

@@ -33,7 +33,7 @@ export default function App() {
   }
 
   return user ? (
-    <Dashboard user={user} onSignOut={signOut} />
+    <Dashboard user={user} onSignOut={signOut} onUserChanged={setUser} />
   ) : (
     <AuthScreen onAuthenticated={setUser} />
   );
