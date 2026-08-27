@@ -1,0 +1,52 @@
+# Render Blueprint for the PayHive staging environment.
+#
+# One service, not two: the API also serves the built web client, so the
+# browser talks to /api on its own origin and the session cookie never has to
+# be SameSite=None. See the routing note in server/src/index.ts.
+#
+# Create it once -- Render dashboard, New -> Blueprint, connect this repo --
+# and every push to main redeploys.
+
+services:
+  - type: web
+    name: payhive
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+
+    # --include=dev is load-bearing. Render sets NODE_ENV=production, and npm
+    # then skips devDependencies, which is where typescript and vite live.
+    # Without it the build fails with "tsc: not found".
+    buildCommand: npm ci --include=dev && npm run build
+
+    # Migrations run on every boot. invariants.sql drops each constraint and
+    # trigger before recreating it, so re-applying on restart is a no-op
+    # rather than an error.
+    startCommand: npm run db:migrate && npm start
+
+    # Render restarts the service if this stops answering.
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Staging funds itself with the mock provider: deposits settle instantly
+      # and no Stripe key is involved. Switching this to stripe is a separate
+      # decision with compliance attached -- see the README.
+      - key: PAYMENT_PROVIDER
+        value: mock
+
+      # Paste the Neon connection string in the dashboard. It must keep the
+      # ?sslmode=require suffix Neon gives you: that is what turns TLS on in
+      # server/src/db/index.ts.
+      - key: DATABASE_URL
+        sync: false
+
+      # Generated once by Render and kept across deploys. Read it from the
+      # dashboard when you want to call /api/admin/reconciliation.
+      - key: ADMIN_TOKEN
+        generateValue: true
+
+    # PORT is supplied by Render and read by server/src/index.ts.

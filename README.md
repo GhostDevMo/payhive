@@ -103,6 +103,42 @@ on Windows.
 
 ---
 
+## Deploy a staging environment
+
+`render.yaml` describes a **single web service**: the API also serves the built
+web client. That is deliberate. The browser asks for `/api` on its own origin,
+so there is no CORS and the session cookie stays `SameSite=lax` — the same
+property the Vite dev proxy provides in development.
+
+Staging runs `PAYMENT_PROVIDER=mock`. No real money moves, so none of the
+licensing in the Stripe section below applies to it.
+
+**1. A database.** Create a project at [neon.tech](https://neon.tech) and copy
+the connection string. Keep its `?sslmode=require` suffix — that suffix is what
+turns TLS on in `server/src/db/index.ts`, and without it the connection is
+refused.
+
+**2. The service.** In Render: **New → Blueprint**, connect this repository. It
+reads `render.yaml` and asks for the one value not in the file, `DATABASE_URL`.
+Paste the Neon string. `ADMIN_TOKEN` is generated for you.
+
+**3. First boot** runs `npm run db:migrate` against the empty Neon database and
+builds the schema and the ledger invariants. Migrations run on every boot;
+`invariants.sql` is idempotent, so restarts are a no-op.
+
+**4. Check it.** Open the service URL, create an account, press **Add funds**.
+Then prove the books, reading `ADMIN_TOKEN` from the Render dashboard:
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" https://<your-service>.onrender.com/api/admin/reconciliation
+```
+
+Two things about the free tier: the service sleeps after inactivity, so the
+first request takes around a minute, and it is a single instance — fine for
+staging, not a model for how this would run with real money behind it.
+
+---
+
 ## How the money works
 
 Everything that moves value is a **balanced journal entry**. There is one
