@@ -12,7 +12,11 @@ services:
     name: payhive
     runtime: node
     plan: free
-    region: oregon
+    # Ohio is AWS us-east-2, the same region as the Neon endpoint. The ledger
+    # makes several round trips per transfer while holding row locks, so
+    # putting the app and the database on opposite coasts is paid for on
+    # every send. Match this to wherever the database actually lives.
+    region: ohio
     branch: main
 
     # --include=dev is load-bearing. Render sets NODE_ENV=production, and npm
