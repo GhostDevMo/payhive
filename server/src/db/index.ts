@@ -34,6 +34,21 @@ export const pool = new Pool({
   // the default isolation level plus explicit row locks is what we rely on.
 });
 
+/**
+ * A pooled client that is idle when its connection goes away — a database
+ * restart, a pooler recycling connections, a serverless compute suspending —
+ * makes the pool emit 'error'. An 'error' event with no listener is an
+ * uncaught exception in Node, so without this the process dies and takes every
+ * in-flight request with it. Against a local Postgres that never happens;
+ * against a managed one it is routine, and the result is a restart loop.
+ *
+ * The pool discards the broken client on its own. All this has to do is keep
+ * the failure survivable and visible.
+ */
+pool.on('error', (error) => {
+  console.error('[payhive] idle client dropped, pool will recover:', error.message);
+});
+
 export const db = drizzle(pool, { schema });
 
 export type Database = typeof db;
