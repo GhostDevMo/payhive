@@ -2,7 +2,10 @@
   "name": "payhive",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["server", "web"],
+  "workspaces": [
+    "server",
+    "web"
+  ],
   "scripts": {
     "dev": "concurrently --names api,web --prefix-colors yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "npm run dev --workspace=@payhive/server",
@@ -11,7 +14,8 @@
     "db:reset": "npm run db:reset --workspace=@payhive/server",
     "test": "npm run test --workspace=@payhive/server",
     "typecheck": "npm run typecheck --workspace=@payhive/server && npm run typecheck --workspace=@payhive/web",
-    "build": "npm run build --workspace=@payhive/server && npm run build --workspace=@payhive/web"
+    "build": "npm run build --workspace=@payhive/server && npm run build --workspace=@payhive/web",
+    "start": "npm run start --workspace=@payhive/server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

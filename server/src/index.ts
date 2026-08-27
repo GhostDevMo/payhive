@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -31,12 +34,25 @@ app.use(
 
 // Webhooks first: they need the raw body, so they must not meet express.json().
 app.use('/webhooks', webhookRouter);
+app.use('/api/webhooks', webhookRouter);
 
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 app.use(loadUser);
 
-app.get('/health', async (_req, res) => {
+/**
+ * The API lives on a router rather than directly on the app so it can be
+ * mounted twice: at the root, which is how the tests and any direct client
+ * call it, and under /api, which is what the browser uses.
+ *
+ * The browser path matters. The web client asks for /api/... on its own
+ * origin, so in a single-service deployment the session cookie is same-origin
+ * and never has to be SameSite=None. That is the same reason the Vite dev
+ * server proxies /api — this keeps dev and production honest about it.
+ */
+const api = express.Router();
+
+api.get('/health', async (_req, res) => {
   res.json({ ok: true, provider: getProvider().name });
 });
 
@@ -45,14 +61,38 @@ app.get('/health', async (_req, res) => {
  * `ok: false`. Behind ADMIN_TOKEN because it reports every account's position,
  * not the caller's own.
  */
-app.get('/admin/reconciliation', requireAdmin, async (_req, res) => {
+api.get('/admin/reconciliation', requireAdmin, async (_req, res) => {
   const report = await reconcile();
   res.status(report.ok ? 200 : 500).json(report);
 });
 
-app.use('/auth', authRouter);
-app.use('/wallets', walletRouter);
-app.use('/deposits', depositRouter);
+api.use('/auth', authRouter);
+api.use('/wallets', walletRouter);
+api.use('/deposits', depositRouter);
+
+app.use(api);
+app.use('/api', api);
+
+/**
+ * Serve the built web client when there is one. Gated on the directory
+ * existing rather than on NODE_ENV, so a production build can be smoke-tested
+ * locally without pretending to be production in every other respect.
+ */
+const here = path.dirname(fileURLToPath(import.meta.url));
+const webDist = process.env.WEB_DIST ?? path.resolve(here, '../../web/dist');
+
+if (existsSync(webDist)) {
+  app.use(express.static(webDist));
+
+  // SPA fallback. Registered after the API mounts, so it can only catch what
+  // the API did not — an unknown /api path still has to 404 as JSON below
+  // rather than being answered with index.html.
+  app.get(/^(?!\/api\/|\/webhooks\/).*/, (_req, res, next) => {
+    const index = path.join(webDist, 'index.html');
+    if (!existsSync(index)) return next();
+    res.sendFile(index);
+  });
+}
 
 app.use((_req, res) => {
   res.status(404).json({ error: { code: 'not_found', message: 'No such endpoint.' } });
