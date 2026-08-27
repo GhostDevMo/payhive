@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: typecheck, migrate, test, build
+    runs-on: ubuntu-latest
+
+    # The same Postgres the app expects locally. The tests run against real
+    # invariant triggers, not a mock, so a database is not optional here.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: payhive
+          POSTGRES_PASSWORD: payhive
+          POSTGRES_DB: payhive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U payhive -d payhive"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://payhive:payhive@localhost:5432/payhive
+      ADMIN_TOKEN: ci-only-not-a-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # ci, not install: fail on a lockfile that has drifted from package.json
+      # rather than silently resolving something new.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run db:migrate
+
+      - run: npm test
+
+      - run: npm run build
