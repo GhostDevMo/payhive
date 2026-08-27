@@ -10,10 +10,14 @@ export default function Dashboard({
   user,
   onSignOut,
   onUserChanged,
+  onOpenProfile,
+  onCurrencyChanged,
 }: {
   user: User;
   onSignOut: () => void;
   onUserChanged: (user: User) => void;
+  onOpenProfile: () => void;
+  onCurrencyChanged: (currency: string) => void;
 }) {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [transactions, setTransactions] = useState<TransactionRow[]>([]);
@@ -39,6 +43,12 @@ export default function Dashboard({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The account screen needs to know which currency a linked bank should
+  // receive, and the wallet tabs are where that is chosen.
+  useEffect(() => {
+    onCurrencyChanged(active);
+  }, [active, onCurrencyChanged]);
 
   const activeWallet = wallets.find((w) => w.currency === active);
 
@@ -70,6 +80,9 @@ export default function Dashboard({
               {copied ? 'Copied' : user.handle ? `@${user.handle}` : user.payhiveId}
             </button>
           </div>
+          <button onClick={onOpenProfile} className="btn-ghost !px-3 !py-1.5 text-xs">
+            Account
+          </button>
           <button onClick={onSignOut} className="btn-ghost !px-3 !py-1.5 text-xs">
             Sign out
           </button>

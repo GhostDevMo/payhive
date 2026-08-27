@@ -31,6 +31,18 @@ export interface User {
   kycStatus?: string;
 }
 
+export interface BankAccount {
+  id: string;
+  institution: string;
+  last4: string;
+  currency: string;
+  country: string;
+  isDefault: boolean;
+  /** False when the account is linked but cannot yet receive a payout. */
+  payoutReady: boolean;
+  createdAt: string;
+}
+
 export interface Wallet {
   accountId: string;
   currency: string;
@@ -119,6 +131,33 @@ export const api = {
 
   setHandle: (handle: string) =>
     call<{ handle: string }>('/auth/me/handle', { method: 'PUT', body: { handle } }),
+
+  updateProfile: (input: { displayName?: string; email?: string; currentPassword?: string }) =>
+    call<{ user: User }>('/auth/me', { method: 'PATCH', body: input }),
+
+  changePassword: (input: { currentPassword: string; newPassword: string }) =>
+    call<void>('/auth/me/password', { method: 'PUT', body: input }),
+
+  bankAccounts: () => call<{ bankAccounts: BankAccount[] }>('/bank-accounts'),
+
+  /** Step one of linking: a short-lived token the aggregator's UI opens with. */
+  bankLinkToken: (input: { currency: string; country: string }) =>
+    call<{ linkToken: string; provider: string; usesClientSdk: boolean }>(
+      '/bank-accounts/link-token',
+      { method: 'POST', body: input },
+    ),
+
+  /** Step two: hand back what the aggregator gave the browser. */
+  linkBankAccount: (input: { publicToken: string; accountId?: string; country: string }) =>
+    call<{ bankAccount: BankAccount }>('/bank-accounts', { method: 'POST', body: input }),
+
+  setDefaultBankAccount: (id: string) =>
+    call<{ bankAccount: BankAccount }>(`/bank-accounts/${encodeURIComponent(id)}/default`, {
+      method: 'POST',
+    }),
+
+  removeBankAccount: (id: string) =>
+    call<void>(`/bank-accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   deposit: (input: { amount: string; currency: string }, key: string) =>
     call<{ deposit: { status: string; transactionId?: string; clientSecret?: string | null } }>(

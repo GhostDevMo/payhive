@@ -264,6 +264,17 @@ describe('books', () => {
         .expect(201);
     }
 
+    // Money can only leave to somewhere it can actually arrive, so a
+    // withdrawal now needs a linked account.
+    await alice.agent
+      .post('/bank-accounts/link-token')
+      .send({ currency: 'USD', country: 'US' })
+      .expect(200);
+    await alice.agent
+      .post('/bank-accounts')
+      .send({ publicToken: `mock_public_USD_${randomUUID()}`, country: 'US' })
+      .expect(201);
+
     await alice.agent
       .post('/wallets/withdrawals')
       .set('Idempotency-Key', randomUUID())

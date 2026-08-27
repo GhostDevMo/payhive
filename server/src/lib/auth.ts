@@ -1,6 +1,6 @@
 import { randomBytes, randomInt, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 import { promisify } from 'node:util';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { sessions, users } from '../db/schema.js';
 
@@ -126,6 +126,18 @@ export async function resolveSession(sessionId: string): Promise<SessionUser | n
     .limit(1);
 
   return rows[0] ?? null;
+}
+
+/**
+ * End every session for a user except the one making the request.
+ *
+ * Used when a password changes: if the reason is that somebody else knows it,
+ * leaving their session signed in defeats the change.
+ */
+export async function destroyOtherSessions(userId: string, keepSessionId: string): Promise<void> {
+  await db
+    .delete(sessions)
+    .where(and(eq(sessions.userId, userId), ne(sessions.id, keepSessionId)));
 }
 
 export async function destroySession(sessionId: string): Promise<void> {

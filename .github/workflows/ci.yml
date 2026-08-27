@@ -30,6 +30,7 @@ jobs:
     env:
       DATABASE_URL: postgres://payhive:payhive@localhost:5432/payhive
       ADMIN_TOKEN: ci-only-not-a-secret
+      SECRETS_KEY: ci-only-secrets-key-not-used-anywhere-real
 
     steps:
       - uses: actions/checkout@v4

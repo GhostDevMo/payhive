@@ -284,6 +284,62 @@ export async function withdraw(params: WithdrawParams): Promise<{ transactionId:
   });
 }
 
+/**
+ * Put a withdrawal back after the payout failed.
+ *
+ * A withdrawal debits the wallet before the provider is called, because the
+ * opposite order can send money that was never covered. The cost of that choice
+ * is this function: when the provider refuses, the debit has to be undone.
+ *
+ * It is a new balanced entry rather than a deletion. The books record what
+ * happened — money left, then came back — and a ledger that edits its own past
+ * is not a ledger.
+ */
+export async function reverseWithdrawal(params: {
+  userId: string;
+  amount: Money;
+  reversesTransactionId: string;
+  reason: string;
+}): Promise<{ transactionId: string }> {
+  return db.transaction(async (tx) => {
+    const wallet = await getOrCreateAccount(tx, {
+      kind: 'user_wallet',
+      currency: params.amount.currency,
+      userId: params.userId,
+    });
+    const payout = await getOrCreateAccount(tx, {
+      kind: 'system_payout',
+      currency: params.amount.currency,
+    });
+
+    const result = await post(tx, {
+      type: 'reversal',
+      description: 'Withdrawal reversed: the payout could not be sent',
+      initiatedBy: params.userId,
+      metadata: { reverses: params.reversesTransactionId, reason: params.reason },
+      entries: [
+        { accountId: payout.id, amount: -params.amount.amount, currency: params.amount.currency },
+        { accountId: wallet.id, amount: params.amount.amount, currency: params.amount.currency },
+      ],
+    });
+
+    await tx
+      .update(transactions)
+      .set({ status: 'reversed' })
+      .where(eq(transactions.id, params.reversesTransactionId));
+
+    return { transactionId: result.id };
+  });
+}
+
+/** Record the provider's reference once a payout has been accepted. */
+export async function attachProviderRef(
+  transactionId: string,
+  providerRef: string,
+): Promise<void> {
+  await db.update(transactions).set({ providerRef }).where(eq(transactions.id, transactionId));
+}
+
 // ---------------------------------------------------------------------------
 // History
 // ---------------------------------------------------------------------------

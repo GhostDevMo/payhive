@@ -2,11 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError, api, type User } from './lib/api';
 import AuthScreen from './components/AuthScreen';
 import Dashboard from './components/Dashboard';
+import Profile from './components/Profile';
 import { Logo } from './components/Logo';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
+  // Two screens is not worth a router. The moment there is a third, or a URL
+  // someone needs to share, this should become one.
+  const [view, setView] = useState<'wallet' | 'profile'>('wallet');
+  const [currency, setCurrency] = useState('USD');
 
   useEffect(() => {
     api
@@ -22,6 +27,7 @@ export default function App() {
   const signOut = useCallback(async () => {
     await api.logout().catch(() => undefined);
     setUser(null);
+    setView('wallet');
   }, []);
 
   if (checking) {
@@ -32,9 +38,22 @@ export default function App() {
     );
   }
 
-  return user ? (
-    <Dashboard user={user} onSignOut={signOut} onUserChanged={setUser} />
+  if (!user) return <AuthScreen onAuthenticated={setUser} />;
+
+  return view === 'profile' ? (
+    <Profile
+      user={user}
+      currency={currency}
+      onUserChanged={setUser}
+      onBack={() => setView('wallet')}
+    />
   ) : (
-    <AuthScreen onAuthenticated={setUser} />
+    <Dashboard
+      user={user}
+      onSignOut={signOut}
+      onUserChanged={setUser}
+      onOpenProfile={() => setView('profile')}
+      onCurrencyChanged={setCurrency}
+    />
   );
 }

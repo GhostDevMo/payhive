@@ -1,4 +1,8 @@
 import 'dotenv/config';
+
+// Encryption key for the linked-bank token column. Set here rather than in a
+// .env so CI, which has no .env file, exercises the same encrypted path.
+process.env.SECRETS_KEY ??= 'test-only-secrets-key-not-used-anywhere-real';
 import { afterAll, beforeEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { db, pool } from '../src/db/index.js';
@@ -11,7 +15,7 @@ import { db, pool } from '../src/db/index.js';
 beforeEach(async () => {
   await db.execute(sql`
     TRUNCATE TABLE postings, transactions, idempotency_keys, provider_events,
-                   sessions, accounts, retired_handles, users
+                   sessions, accounts, retired_handles, bank_accounts, users
     RESTART IDENTITY CASCADE
   `);
 });

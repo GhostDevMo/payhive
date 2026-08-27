@@ -5,9 +5,20 @@ import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
 import { requireAuth } from '../middleware/auth.js';
 import { idempotent } from '../middleware/idempotency.js';
-import { history, listWallets, openWallet, transfer, withdraw, WalletError } from '../lib/wallet.js';
+import {
+  attachProviderRef,
+  history,
+  listWallets,
+  openWallet,
+  reverseWithdrawal,
+  transfer,
+  withdraw,
+  WalletError,
+} from '../lib/wallet.js';
 import { MoneyError, isSupportedCurrency, parseDecimal, SUPPORTED_CURRENCIES } from '../lib/money.js';
 import { resolvePayee } from '../lib/handle.js';
+import { BankError, resolvePayoutDestination } from '../lib/bank.js';
+import { getProvider } from '../providers/index.js';
 
 export const walletRouter = Router();
 
@@ -98,8 +109,22 @@ walletRouter.post('/transfers', idempotent('POST /wallets/transfers'), async (re
 const withdrawSchema = z.object({
   amount: z.string().min(1).max(30),
   currency: z.string().length(3),
+  /** Which linked account to pay. Omitted means the user's default. */
+  bankAccountId: z.string().uuid().optional(),
 });
 
+/**
+ * Send money out to a linked bank account.
+ *
+ * The order here is deliberate and is the whole reason this handler is not
+ * three lines. The wallet is debited FIRST, inside a transaction that refuses
+ * to overdraw, and only then is the provider asked to move the money. Calling
+ * the provider first would mean a payout could succeed against a balance that
+ * did not cover it.
+ *
+ * The price of that order is the reversal: if the provider refuses, the debit
+ * is put back as a new balanced entry.
+ */
 walletRouter.post('/withdrawals', idempotent('POST /wallets/withdrawals'), async (req, res) => {
   const parsed = withdrawSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -107,12 +132,73 @@ walletRouter.post('/withdrawals', idempotent('POST /wallets/withdrawals'), async
     return;
   }
 
+  let amount;
   try {
-    const amount = parseDecimal(parsed.data.amount, parsed.data.currency);
-    const result = await withdraw({ userId: req.user!.id, amount });
-    res.status(201).json({ withdrawal: result });
+    amount = parseDecimal(parsed.data.amount, parsed.data.currency);
   } catch (error) {
     handleWalletError(error, res);
+    return;
+  }
+
+  let destination;
+  try {
+    destination = await resolvePayoutDestination(
+      req.user!.id,
+      amount.currency,
+      parsed.data.bankAccountId,
+    );
+  } catch (error) {
+    if (error instanceof BankError) {
+      res.status(error.status).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    throw error;
+  }
+
+  let result;
+  try {
+    result = await withdraw({
+      userId: req.user!.id,
+      amount,
+      description: `Withdrawal to ${destination.institution} ••${destination.last4}`,
+      metadata: { bankAccountId: destination.id },
+    });
+  } catch (error) {
+    handleWalletError(error, res);
+    return;
+  }
+
+  try {
+    const payout = await getProvider().createPayout({
+      userId: req.user!.id,
+      destinationRef: destination.destinationRef,
+      amount,
+      description: 'PayHive withdrawal',
+      metadata: { requestId: result.transactionId },
+    });
+    await attachProviderRef(result.transactionId, payout.providerRef);
+
+    res.status(201).json({
+      withdrawal: {
+        ...result,
+        status: payout.status,
+        to: { institution: destination.institution, last4: destination.last4 },
+      },
+    });
+  } catch (error) {
+    await reverseWithdrawal({
+      userId: req.user!.id,
+      amount,
+      reversesTransactionId: result.transactionId,
+      reason: error instanceof Error ? error.message : 'payout failed',
+    });
+
+    res.status(502).json({
+      error: {
+        code: 'payout_failed',
+        message: 'The payout could not be sent. Your balance has not changed.',
+      },
+    });
   }
 });
 

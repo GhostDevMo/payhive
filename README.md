@@ -60,7 +60,7 @@ the default `PAYMENT_PROVIDER=mock` deposits settle instantly, so the whole app
 is usable without a Stripe key or a webhook tunnel.
 
 ```bash
-npm test          # 67 tests, including concurrency and DB-level invariants
+npm test          # 94 tests, including concurrency and DB-level invariants
 npm run typecheck
 ```
 
@@ -256,6 +256,42 @@ web/
 
 PayHive IDs use Crockford base32 — no I, L, O or U — because people read these
 aloud and retype them.
+
+---
+
+## Bank accounts
+
+A user links a bank through an **aggregator** — Plaid — and PayHive never sees
+their bank login or account number. The user authenticates inside Plaid's own
+UI; what comes back to this server is a short-lived public token, exchanged once
+for credentials that are encrypted before they are stored.
+
+Linking a bank and moving money are different jobs done by different companies,
+so they are different seams: `src/banking/` is the aggregator, `src/providers/`
+is the payment partner. Tying them together would have made the choice of one
+depend on the other, and PayHive has signed neither.
+
+```
+BANK_LINK_PROVIDER=mock    simulates the handshake; no Plaid account needed
+BANK_LINK_PROVIDER=plaid   real Plaid Link
+```
+
+The mock is not a shortcut past the flow — it still mints a link session and
+still exchanges a public token, so the code path exercised in tests is the one
+that runs in production. Only the bank is imaginary.
+
+**What is stored:** an item id, an account id, the institution name, the last
+four digits, and the aggregator's access token **encrypted with AES-256-GCM**
+(`SECRETS_KEY`, see `src/lib/secrets.ts`). The access token is a long-lived
+credential to somebody's bank data, so it is never returned to a client and
+never appears in an API response. Removing an account clears it.
+
+**Withdrawals now require a linked account**, and the order of operations
+matters: the wallet is debited first, inside a transaction that refuses to
+overdraw, and only then is the provider asked to send the money. The reverse
+order would let a payout succeed against a balance that never covered it. The
+price of that choice is the reversal — if the provider refuses, the debit is put
+back as a new balanced entry rather than by editing the past.
 
 ---
 

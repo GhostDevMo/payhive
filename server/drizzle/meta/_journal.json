@@ -15,6 +15,13 @@
       "when": 1787871999794,
       "tag": "0001_dazzling_zuras",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787874093069,
+      "tag": "0002_perfect_senator_kelly",
+      "breakpoints": true
     }
   ]
 }

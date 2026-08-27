@@ -8,6 +8,7 @@ import cors from 'cors';
 import { authRouter } from './routes/auth.js';
 import { walletRouter } from './routes/wallets.js';
 import { depositRouter } from './routes/deposits.js';
+import { bankRouter } from './routes/bank.js';
 import { webhookRouter } from './routes/webhooks.js';
 import { loadUser, requireAdmin } from './middleware/auth.js';
 import { reconcile } from './lib/ledger.js';
@@ -69,6 +70,7 @@ api.get('/admin/reconciliation', requireAdmin, async (_req, res) => {
 api.use('/auth', authRouter);
 api.use('/wallets', walletRouter);
 api.use('/deposits', depositRouter);
+api.use('/bank-accounts', bankRouter);
 
 app.use(api);
 app.use('/api', api);

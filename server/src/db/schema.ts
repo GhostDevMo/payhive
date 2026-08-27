@@ -73,6 +73,62 @@ export const users = pgTable(
  * Letting it resolve to a different person later turns a stale contact into a
  * payment to a stranger, so released names are burned rather than recycled.
  */
+/**
+ * A bank account a user has linked through an aggregator.
+ *
+ * What is deliberately NOT here: the account number, the routing number, and
+ * the user's bank password. The user authenticates inside the aggregator's own
+ * UI, and PayHive keeps only tokens and enough to recognise the account on
+ * screen. Holding the real details would put this database in a compliance
+ * category the product has not signed up for, and buys nothing — the
+ * aggregator and the payment provider are the only parties that need them.
+ *
+ * `accessTokenEncrypted` is the one genuine secret in this table. It is a
+ * long-lived credential to the user's bank data, so it is encrypted at rest and
+ * never leaves the server. See lib/secrets.ts.
+ */
+export const bankAccounts = pgTable(
+  'bank_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Which aggregator linked it, so a swap cannot silently reuse its tokens. */
+    provider: text('provider').notNull(),
+    /** The aggregator's id for the bank login. */
+    itemId: text('item_id').notNull(),
+    /** The chosen account within that login. */
+    externalAccountId: text('external_account_id').notNull(),
+    /** AES-256-GCM. Never selected into anything that reaches a client. */
+    accessTokenEncrypted: text('access_token_encrypted').notNull(),
+    /**
+     * Token the payment provider pays out to. Null when the aggregator could
+     * not mint one for this processor or region, which means the account is
+     * linked and visible but not yet payable.
+     */
+    destinationRef: text('destination_ref'),
+    /** For display only. */
+    institution: text('institution').notNull(),
+    last4: text('last4').notNull(),
+    currency: text('currency').notNull(),
+    country: text('country').notNull(),
+    /** 'active' | 'removed'. Rows are retired, never deleted: a past payout refers to them. */
+    status: text('status').notNull().default('active'),
+    isDefault: boolean('is_default').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+  },
+  (t) => ({
+    userIdx: index('bank_accounts_user_idx').on(t.userId),
+    // One default per user, enforced by the database rather than by remembering
+    // to clear the old one.
+    defaultIdx: uniqueIndex('bank_accounts_one_default')
+      .on(t.userId)
+      .where(sql`is_default AND status = 'active'`),
+  }),
+);
+
 export const retiredHandles = pgTable('retired_handles', {
   /** The folded form, matching users.handle_skeleton. */
   skeleton: text('skeleton').primaryKey(),
