@@ -300,6 +300,30 @@ targets Node 20. Moving both together is the upgrade when it is wanted.
 
 ---
 
+## Getting back into an account
+
+There is **no password reset yet**. It needs somewhere to send an email, and no
+email provider is wired up, so until then a forgotten password is an operator
+task rather than a self-service one:
+
+```bash
+npm run user:list                                   # which accounts exist
+npm run user:password -- someone@example.com        # prompts for a new one
+```
+
+Both run against whatever `DATABASE_URL` is set, so point them at the
+environment you actually mean — a local `.env` and a deployed database are
+different places, and an account existing in one says nothing about the other.
+The new password is read from stdin rather than passed as an argument, so it
+does not land in shell history, and every existing session for that user is
+signed out, on the same reasoning as changing a password in the app.
+
+Note that the tests truncate every table between runs. Any account created in
+the local development database is gone the next time `npm test` runs; this is
+deliberate, and it is why local accounts disappear.
+
+---
+
 ## Sessions, on the web and on a phone
 
 One session, two transports. A browser gets an httpOnly cookie, which

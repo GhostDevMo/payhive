@@ -12,6 +12,8 @@
     "dev:web": "npm run dev --workspace=@payhive/web",
     "db:migrate": "npm run db:migrate --workspace=@payhive/server",
     "db:reset": "npm run db:reset --workspace=@payhive/server",
+    "user:list": "npm run user:list --workspace=@payhive/server",
+    "user:password": "npm run user:password --workspace=@payhive/server --",
     "test": "npm run test --workspace=@payhive/server",
     "typecheck": "npm run typecheck --workspace=@payhive/server && npm run typecheck --workspace=@payhive/web",
     "build": "npm run build --workspace=@payhive/server && npm run build --workspace=@payhive/web",
