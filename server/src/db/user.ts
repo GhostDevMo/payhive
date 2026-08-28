@@ -9,6 +9,7 @@
  *
  *   npm run user:list                          -- who exists
  *   npm run user:password -- someone@mail.com  -- set a new password
+ *   npm run user:hash -- someone@mail.com      -- print SQL to run elsewhere
  *
  * The new password is read from stdin rather than taken as an argument, so it
  * does not end up in shell history or in the process list.
@@ -96,12 +97,53 @@ async function setPassword(email: string): Promise<void> {
   console.log(`[payhive] ${removed.length} existing session(s) signed out.`);
 }
 
+/**
+ * Print an UPDATE statement for a password, without touching a database.
+ *
+ * For when the only access to an environment is a provider's SQL console. The
+ * hash is computed locally and the statement pasted there, so the password
+ * itself never travels and no connection string has to be found first.
+ */
+async function printHash(email: string): Promise<void> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const password = (await rl.question('New password: ')).trim();
+  rl.close();
+
+  if (password.length < 10) {
+    console.error('[payhive] Password must be at least 10 characters.');
+    process.exitCode = 1;
+    return;
+  }
+
+  const hash = await hashPassword(password);
+  const target = email.trim().toLowerCase().replace(/'/g, "''");
+
+  console.log('\n-- Run this in your database console. It changes one account.');
+  console.log(`UPDATE users SET password_hash = '${hash}'`);
+  console.log(`WHERE lower(email) = '${target}';`);
+  console.log('\n-- Then sign out anything still holding a session for that account:');
+  console.log('DELETE FROM sessions WHERE user_id = (');
+  console.log(`  SELECT id FROM users WHERE lower(email) = '${target}'`);
+  console.log(');');
+  console.log('DELETE FROM refresh_tokens WHERE user_id = (');
+  console.log(`  SELECT id FROM users WHERE lower(email) = '${target}'`);
+  console.log(');\n');
+}
+
 async function main(): Promise<void> {
   const [command, argument] = process.argv.slice(2);
 
   switch (command) {
     case 'list':
       await list();
+      break;
+    case 'hash':
+      if (!argument) {
+        console.error('Usage: npm run user:hash -- someone@example.com');
+        process.exitCode = 1;
+        break;
+      }
+      await printHash(argument);
       break;
     case 'password':
       if (!argument) {

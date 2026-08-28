@@ -346,7 +346,15 @@ Operator commands, unchanged and still useful when email is not an option:
 ```bash
 npm run user:list                                   # which accounts exist
 npm run user:password -- someone@example.com        # prompts for a new one
+npm run user:hash -- someone@example.com            # prints SQL to run elsewhere
 ```
+
+`user:hash` is for when the only access to an environment is a provider's SQL
+console, such as Neon's. It computes the hash locally and prints the `UPDATE`
+to paste there, so the password never leaves the machine and no connection
+string has to be found first. Note that `password_hash` holds a scrypt digest
+in a specific format — a plaintext password typed straight into that column
+will simply never match, so the statement has to come from here.
 
 Both run against whatever `DATABASE_URL` is set, so point them at the
 environment you mean — a local `.env` and a deployed database are different
