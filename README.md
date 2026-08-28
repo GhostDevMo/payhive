@@ -60,7 +60,7 @@ the default `PAYMENT_PROVIDER=mock` deposits settle instantly, so the whole app
 is usable without a Stripe key or a webhook tunnel.
 
 ```bash
-npm test          # 123 tests, including concurrency and DB-level invariants
+npm test          # 138 tests, including concurrency and DB-level invariants
 npm run typecheck
 ```
 
@@ -178,6 +178,38 @@ fixed global order is what stops two people paying each other simultaneously
 from deadlocking. There are tests for both: 25 concurrent sends against a
 balance that covers 10 leave exactly 10 successes and a zero balance, and 40
 crossing transfers between two users complete with no failures.
+
+**Fees.** Charged on the rails in and out, never between wallets. A
+PayHive-to-PayHive send stays free because it costs PayHive nothing — two rows
+in our own ledger, no third party to pay — and the send screen says so. A
+withdrawal costs money to make, so that is where the fee sits.
+
+A fee makes a movement a **three-posting entry**, which is the first of them in
+this ledger and the shape FX and escrow both need:
+
+```
+withdraw 100.00   user wallet -100.00  ->  system_payout +99.00
+                                       ->  system_fee     +1.00
+```
+
+The fee comes out of the amount rather than on top, so a request to move 100
+always moves exactly 100 out of the source and the difference is what arrives.
+Rates are **basis points**, so a rate is a whole number and the arithmetic stays
+integer like every other amount here; the proportional part rounds **down**, so
+a stated 1% can never turn out to have billed more. A zero fee posts two
+entries, not three, because the ledger forbids a zero-amount posting.
+
+`GET /wallets/quote?operation=withdrawal&amount=100.00&currency=USD` prices an
+operation without moving anything, so a client can show the fee before the user
+commits rather than after.
+
+Reversing a withdrawal reverses **all three** legs. Returning the wallet and the
+payout while keeping the fee would still balance arithmetically, and would mean
+PayHive had charged for work it did not do.
+
+**The rates in `server/src/lib/fees.ts` are placeholders.** They are shaped like
+real ones so the code can be exercised; what PayHive actually charges is a
+commercial decision that has not been made.
 
 **Reconciliation.** `GET /admin/reconciliation` proves the books: every cached
 balance equals the sum of its postings, every journal entry sums to zero, and

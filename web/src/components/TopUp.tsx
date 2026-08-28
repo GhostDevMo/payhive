@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, newIdempotencyKey } from '../lib/api';
 
 /**
@@ -23,6 +23,33 @@ export default function TopUp({
   const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const idempotencyKey = useRef<string | null>(null);
+  const [fee, setFee] = useState<{ fee: string; net: string } | null>(null);
+
+  /**
+   * Price the amount as it is typed.
+   *
+   * A fee the user only discovers on the receipt is a bad fee. Debounced, and
+   * failures are silent: a quote that cannot be fetched should not put an
+   * error in front of someone who has not asked for anything yet.
+   */
+  useEffect(() => {
+    setFee(null);
+    const typed = amount.trim();
+    if (!typed || Number.isNaN(Number(typed)) || Number(typed) <= 0) return;
+
+    const timer = setTimeout(() => {
+      api
+        .quote({ operation: mode === 'deposit' ? 'deposit' : 'withdrawal', amount: typed, currency })
+        .then((r) => {
+          if (r.quote.fee.amount !== '0') {
+            setFee({ fee: r.quote.fee.formatted, net: r.quote.net.formatted });
+          }
+        })
+        .catch(() => setFee(null));
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [amount, mode, currency]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -43,8 +70,16 @@ export default function TopUp({
             : 'Payment started — complete it with your card to finish.',
         );
       } else {
-        await api.withdraw({ amount: amount.trim(), currency }, idempotencyKey.current);
-        setSuccess(`Withdrawal of ${amount} ${currency} requested.`);
+        const result = await api.withdraw(
+          { amount: amount.trim(), currency },
+          idempotencyKey.current,
+        );
+        const net = result.withdrawal?.net?.formatted;
+        setSuccess(
+          net
+            ? `Sending ${net} ${currency} to your bank.`
+            : `Withdrawal of ${amount} ${currency} requested.`,
+        );
       }
       setAmount('');
       idempotencyKey.current = null;
@@ -116,6 +151,23 @@ export default function TopUp({
             </button>
           ))}
         </div>
+
+        {fee && (
+          <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 text-xs">
+            <div className="flex justify-between text-slate-500">
+              <span>Fee</span>
+              <span className="tnum text-slate-400">
+                {fee.fee} {currency}
+              </span>
+            </div>
+            <div className="mt-1 flex justify-between font-medium text-slate-300">
+              <span>{mode === 'deposit' ? 'Added to your wallet' : 'Sent to your bank'}</span>
+              <span className="tnum">
+                {fee.net} {currency}
+              </span>
+            </div>
+          </div>
+        )}
 
         {error && (
           <p

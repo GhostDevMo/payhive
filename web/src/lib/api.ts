@@ -294,6 +294,12 @@ export const api = {
   removeBankAccount: (id: string) =>
     call<void>(`/bank-accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  /** What an operation would cost, so the fee is visible before committing. */
+  quote: (input: { operation: 'deposit' | 'withdrawal'; amount: string; currency: string }) =>
+    call<{ quote: { amount: MoneyValue; fee: MoneyValue; net: MoneyValue } }>(
+      `/wallets/quote?operation=${input.operation}&amount=${encodeURIComponent(input.amount)}&currency=${input.currency}`,
+    ),
+
   deposit: (input: { amount: string; currency: string }, key: string) =>
     call<{ deposit: { status: string; transactionId?: string; clientSecret?: string | null } }>(
       '/deposits',
@@ -312,8 +318,18 @@ export const api = {
       };
     }>('/wallets/transfers', { method: 'POST', body: input, idempotencyKey: key }),
 
-  withdraw: (input: { amount: string; currency: string }, key: string) =>
-    call<{ withdrawal: { transactionId: string } }>('/wallets/withdrawals', {
+  withdraw: (input: { amount: string; currency: string; bankAccountId?: string }, key: string) =>
+    call<{
+      withdrawal: {
+        transactionId: string;
+        status?: string;
+        to?: { institution: string; last4: string };
+        amount?: MoneyValue;
+        fee?: MoneyValue;
+        /** What actually reaches the bank: the amount less the fee. */
+        net?: MoneyValue;
+      };
+    }>('/wallets/withdrawals', {
       method: 'POST',
       body: input,
       idempotencyKey: key,

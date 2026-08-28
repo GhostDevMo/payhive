@@ -18,6 +18,7 @@ import {
 import { MoneyError, isSupportedCurrency, parseDecimal, SUPPORTED_CURRENCIES } from '../lib/money.js';
 import { resolvePayee } from '../lib/handle.js';
 import { BankError, resolvePayoutDestination } from '../lib/bank.js';
+import { FeeError, quote, quoteToJSON } from '../lib/fees.js';
 import { getProvider } from '../providers/index.js';
 
 export const walletRouter = Router();
@@ -103,6 +104,47 @@ walletRouter.post('/transfers', idempotent('POST /wallets/transfers'), async (re
 });
 
 // ---------------------------------------------------------------------------
+// Fee quote
+// ---------------------------------------------------------------------------
+
+const quoteSchema = z.object({
+  operation: z.enum(['deposit', 'withdrawal', 'transfer']),
+  amount: z.string().min(1).max(30),
+  currency: z.string().length(3),
+});
+
+/**
+ * What an operation would cost.
+ *
+ * Exists so a client can show the fee before the user commits, rather than
+ * after. Pure arithmetic — it moves nothing and touches no account.
+ */
+walletRouter.get('/quote', async (req, res) => {
+  const parsed = quoteSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { code: 'invalid_request', message: 'An operation, amount and currency are required.' },
+    });
+    return;
+  }
+
+  try {
+    const amount = parseDecimal(parsed.data.amount, parsed.data.currency);
+    res.json({ quote: quoteToJSON(quote(parsed.data.operation, amount)) });
+  } catch (error) {
+    if (error instanceof FeeError) {
+      res.status(422).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    if (error instanceof MoneyError) {
+      res.status(400).json({ error: { code: 'invalid_amount', message: error.message } });
+      return;
+    }
+    throw error;
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Withdrawal
 // ---------------------------------------------------------------------------
 
@@ -155,11 +197,23 @@ walletRouter.post('/withdrawals', idempotent('POST /wallets/withdrawals'), async
     throw error;
   }
 
+  let priced;
+  try {
+    priced = quote('withdrawal', amount);
+  } catch (error) {
+    if (error instanceof FeeError) {
+      res.status(422).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    throw error;
+  }
+
   let result;
   try {
     result = await withdraw({
       userId: req.user!.id,
       amount,
+      fee: priced.fee,
       description: `Withdrawal to ${destination.institution} ••${destination.last4}`,
       metadata: { bankAccountId: destination.id },
     });
@@ -172,7 +226,9 @@ walletRouter.post('/withdrawals', idempotent('POST /wallets/withdrawals'), async
     const payout = await getProvider().createPayout({
       userId: req.user!.id,
       destinationRef: destination.destinationRef,
-      amount,
+      // The net, not the gross: the fee never leaves PayHive, so asking the
+      // provider to send the full amount would pay out money we kept.
+      amount: priced.net,
       description: 'PayHive withdrawal',
       metadata: { requestId: result.transactionId },
     });
@@ -183,12 +239,14 @@ walletRouter.post('/withdrawals', idempotent('POST /wallets/withdrawals'), async
         ...result,
         status: payout.status,
         to: { institution: destination.institution, last4: destination.last4 },
+        ...quoteToJSON(priced),
       },
     });
   } catch (error) {
     await reverseWithdrawal({
       userId: req.user!.id,
       amount,
+      fee: priced.fee,
       reversesTransactionId: result.transactionId,
       reason: error instanceof Error ? error.message : 'payout failed',
     });

@@ -80,6 +80,8 @@ export async function openWallet(userId: string, currency: Currency): Promise<Wa
 // ---------------------------------------------------------------------------
 
 export interface DepositParams {
+  /** Taken out of the amount, so the wallet is credited amount - fee. */
+  fee?: Money;
   userId: string;
   amount: Money;
   /** Stripe PaymentIntent id, or a mock reference in local dev. */
@@ -99,6 +101,9 @@ export async function deposit(params: DepositParams): Promise<{ transactionId: s
   if (params.amount.amount <= 0n) {
     throw new WalletError('Deposit amount must be positive', 'invalid_amount');
   }
+  if (params.fee && params.fee.amount >= params.amount.amount) {
+    throw new WalletError('Fee cannot consume the whole amount', 'invalid_fee');
+  }
 
   return db.transaction(async (tx) => {
     const wallet = await getOrCreateAccount(tx, {
@@ -111,15 +116,24 @@ export async function deposit(params: DepositParams): Promise<{ transactionId: s
       currency: params.amount.currency,
     });
 
+    const currency = params.amount.currency;
+    const fee = params.fee?.amount ?? 0n;
+    const credited = params.amount.amount - fee;
+
     const result = await post(tx, {
       type: 'deposit',
       description: params.description ?? 'Wallet top-up',
       initiatedBy: params.userId,
       providerRef: params.providerRef,
-      metadata: params.metadata ?? {},
+      metadata: { ...(params.metadata ?? {}), ...(fee > 0n ? { fee: fee.toString() } : {}) },
       entries: [
-        { accountId: funding.id, amount: -params.amount.amount, currency: params.amount.currency },
-        { accountId: wallet.id, amount: params.amount.amount, currency: params.amount.currency },
+        { accountId: funding.id, amount: -params.amount.amount, currency },
+        { accountId: wallet.id, amount: credited, currency },
+        // A zero posting is forbidden by the ledger, so a free deposit stays a
+        // two-sided entry rather than gaining an empty third leg.
+        ...(fee > 0n
+          ? [{ accountId: await feeAccount(tx, currency), amount: fee, currency }]
+          : []),
       ],
     });
 
@@ -236,6 +250,8 @@ export async function transfer(params: TransferParams): Promise<TransferResult> 
 export interface WithdrawParams {
   userId: string;
   amount: Money;
+  /** Taken out of the amount, so the destination receives amount - fee. */
+  fee?: Money;
   providerRef?: string | null;
   description?: string;
   metadata?: Record<string, unknown>;
@@ -245,6 +261,9 @@ export interface WithdrawParams {
 export async function withdraw(params: WithdrawParams): Promise<{ transactionId: string }> {
   if (params.amount.amount <= 0n) {
     throw new WalletError('Withdrawal amount must be positive', 'invalid_amount');
+  }
+  if (params.fee && params.fee.amount >= params.amount.amount) {
+    throw new WalletError('Fee cannot consume the whole amount', 'invalid_fee');
   }
 
   return db.transaction(async (tx) => {
@@ -259,15 +278,24 @@ export async function withdraw(params: WithdrawParams): Promise<{ transactionId:
     });
 
     try {
+      const currency = params.amount.currency;
+      const fee = params.fee?.amount ?? 0n;
+      const sent = params.amount.amount - fee;
+
       const result = await post(tx, {
         type: 'withdrawal',
         description: params.description ?? 'Withdrawal to bank account',
         initiatedBy: params.userId,
         providerRef: params.providerRef ?? null,
-        metadata: params.metadata ?? {},
+        metadata: { ...(params.metadata ?? {}), ...(fee > 0n ? { fee: fee.toString() } : {}) },
         entries: [
-          { accountId: wallet.id, amount: -params.amount.amount, currency: params.amount.currency },
-          { accountId: payout.id, amount: params.amount.amount, currency: params.amount.currency },
+          // The wallet is debited the full amount; what leaves for the bank is
+          // the amount less the fee, and the difference is PayHive's revenue.
+          { accountId: wallet.id, amount: -params.amount.amount, currency },
+          { accountId: payout.id, amount: sent, currency },
+          ...(fee > 0n
+            ? [{ accountId: await feeAccount(tx, currency), amount: fee, currency }]
+            : []),
         ],
       });
       return { transactionId: result.id };
@@ -300,6 +328,8 @@ export async function reverseWithdrawal(params: {
   amount: Money;
   reversesTransactionId: string;
   reason: string;
+  /** The fee charged on the original. Reversed with it — see below. */
+  fee?: Money;
 }): Promise<{ transactionId: string }> {
   return db.transaction(async (tx) => {
     const wallet = await getOrCreateAccount(tx, {
@@ -312,14 +342,25 @@ export async function reverseWithdrawal(params: {
       currency: params.amount.currency,
     });
 
+    const currency = params.amount.currency;
+    const fee = params.fee?.amount ?? 0n;
+    const sent = params.amount.amount - fee;
+
     const result = await post(tx, {
       type: 'reversal',
       description: 'Withdrawal reversed: the payout could not be sent',
       initiatedBy: params.userId,
       metadata: { reverses: params.reversesTransactionId, reason: params.reason },
       entries: [
-        { accountId: payout.id, amount: -params.amount.amount, currency: params.amount.currency },
-        { accountId: wallet.id, amount: params.amount.amount, currency: params.amount.currency },
+        // Every leg of the original comes back, including the fee. Reversing
+        // only the wallet and the payout would balance arithmetically while
+        // leaving PayHive holding a charge for work it did not do, and the
+        // payout account short by the same amount.
+        { accountId: payout.id, amount: -sent, currency },
+        ...(fee > 0n
+          ? [{ accountId: await feeAccount(tx, currency), amount: -fee, currency }]
+          : []),
+        { accountId: wallet.id, amount: params.amount.amount, currency },
       ],
     });
 
@@ -418,6 +459,12 @@ export async function history(
 }
 
 // ---------------------------------------------------------------------------
+
+/** PayHive's revenue account for a currency. One per currency, created on first use. */
+async function feeAccount(tx: Transaction, currency: Currency): Promise<string> {
+  const account = await getOrCreateAccount(tx, { kind: 'system_fee', currency });
+  return account.id;
+}
 
 async function loadUser(
   tx: Transaction,
