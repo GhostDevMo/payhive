@@ -11,7 +11,63 @@
  *     the first attempt and reused across retries of that same attempt.
  */
 
-const BASE = '/api';
+/**
+ * Where the API is, and how this client proves who it is.
+ *
+ * On the web the app and the API share an origin, so /api is a relative path
+ * and the session rides along as an httpOnly cookie that JavaScript cannot
+ * read. In a native shell there is no shared origin — the app is served from
+ * capacitor://localhost — so the API needs an absolute URL and the session has
+ * to travel as a bearer token instead. WKWebView drops the cookie either way.
+ */
+export const IS_NATIVE =
+  typeof window !== 'undefined' &&
+  Boolean((window as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+
+const BASE = IS_NATIVE ? `${import.meta.env.VITE_API_URL ?? ''}/api` : '/api';
+
+interface StoredTokens {
+  accessToken: string;
+  refreshToken: string;
+}
+
+/**
+ * Token storage for native clients.
+ *
+ * localStorage is the honest placeholder, not the destination: it is readable
+ * by anything running in the webview. When Capacitor is added, this is the one
+ * function to move onto the platform keychain — everything else already goes
+ * through it.
+ */
+const TOKEN_KEY = 'payhive.tokens';
+
+let tokens: StoredTokens | null = null;
+
+function loadTokens(): StoredTokens | null {
+  if (tokens) return tokens;
+  if (!IS_NATIVE) return null;
+  try {
+    const raw = window.localStorage.getItem(TOKEN_KEY);
+    tokens = raw ? (JSON.parse(raw) as StoredTokens) : null;
+  } catch {
+    tokens = null;
+  }
+  return tokens;
+}
+
+export function storeTokens(next: StoredTokens | null): void {
+  tokens = next;
+  if (!IS_NATIVE) return;
+  try {
+    if (next) window.localStorage.setItem(TOKEN_KEY, JSON.stringify(next));
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // A webview with storage disabled still works for the life of the process.
+  }
+}
+
+/** What login and signup should send, so the server knows which to issue. */
+export const CLIENT_KIND = IS_NATIVE ? 'mobile' : 'web';
 
 export interface MoneyValue {
   amount: string;
@@ -70,20 +126,77 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(
+async function send(
   path: string,
-  options: { method?: string; body?: unknown; idempotencyKey?: string } = {},
-): Promise<T> {
+  options: { method?: string; body?: unknown; idempotencyKey?: string },
+): Promise<Response> {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
 
-  const response = await fetch(`${BASE}${path}`, {
+  const stored = loadTokens();
+  if (stored) headers.Authorization = `Bearer ${stored.accessToken}`;
+
+  return fetch(`${BASE}${path}`, {
     method: options.method ?? 'GET',
     headers,
     credentials: 'include',
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
+}
+
+/**
+ * Exchange the refresh token for a new pair.
+ *
+ * Shared across concurrent callers: several requests expiring at once must
+ * produce one refresh, not several. A second exchange of the same token is
+ * treated by the server as theft and signs the user out, so racing here would
+ * log people out for no reason.
+ */
+let refreshing: Promise<boolean> | null = null;
+
+async function refreshTokens(): Promise<boolean> {
+  refreshing ??= (async () => {
+    const stored = loadTokens();
+    if (!stored) return false;
+    try {
+      const response = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: stored.refreshToken }),
+      });
+      if (!response.ok) {
+        storeTokens(null);
+        return false;
+      }
+      const payload = (await response.json()) as { tokens: StoredTokens };
+      storeTokens({
+        accessToken: payload.tokens.accessToken,
+        refreshToken: payload.tokens.refreshToken,
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshing = null;
+    }
+  })();
+
+  return refreshing;
+}
+
+async function call<T>(
+  path: string,
+  options: { method?: string; body?: unknown; idempotencyKey?: string } = {},
+): Promise<T> {
+  let response = await send(path, options);
+
+  // A native access token is short-lived by design, so one 401 is expected
+  // rather than exceptional. Retried once, with the same idempotency key, so a
+  // money-moving call that crossed an expiry cannot be applied twice.
+  if (response.status === 401 && loadTokens() && !path.startsWith('/auth/refresh')) {
+    if (await refreshTokens()) response = await send(path, options);
+  }
 
   if (response.status === 204) return undefined as T;
 
@@ -105,16 +218,49 @@ export function newIdempotencyKey(): string {
   return crypto.randomUUID();
 }
 
+async function authenticate(
+  path: string,
+  input: Record<string, unknown>,
+): Promise<{ user: User }> {
+  const result = await call<{ user: User; tokens?: StoredTokens }>(path, {
+    method: 'POST',
+    body: { ...input, client: CLIENT_KIND },
+  });
+
+  if (result.tokens) {
+    storeTokens({
+      accessToken: result.tokens.accessToken,
+      refreshToken: result.tokens.refreshToken,
+    });
+  }
+
+  return { user: result.user };
+}
+
 export const api = {
   me: () => call<{ user: User }>('/auth/me'),
 
+  /**
+   * Sign up or in.
+   *
+   * The client kind travels with the request so the server knows which
+   * credential to issue: a cookie for a browser, a token pair for a native
+   * shell. Storing the pair happens here so no screen has to know the
+   * difference.
+   */
   signup: (input: { email: string; password: string; displayName: string; currency: string }) =>
-    call<{ user: User }>('/auth/signup', { method: 'POST', body: input }),
+    authenticate('/auth/signup', input),
 
-  login: (input: { email: string; password: string }) =>
-    call<{ user: User }>('/auth/login', { method: 'POST', body: input }),
+  login: (input: { email: string; password: string }) => authenticate('/auth/login', input),
 
-  logout: () => call<void>('/auth/logout', { method: 'POST' }),
+  logout: async () => {
+    const stored = loadTokens();
+    await call<void>('/auth/logout', {
+      method: 'POST',
+      body: stored ? { refreshToken: stored.refreshToken } : {},
+    });
+    storeTokens(null);
+  },
 
   wallets: () => call<{ wallets: Wallet[] }>('/wallets'),
 

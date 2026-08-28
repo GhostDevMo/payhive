@@ -87,6 +87,48 @@ export const users = pgTable(
  * long-lived credential to the user's bank data, so it is encrypted at rest and
  * never leaves the server. See lib/secrets.ts.
  */
+/**
+ * Long-lived credentials for native clients.
+ *
+ * A phone cannot hold a session cookie: the app is served from its own origin,
+ * so every call is cross-site and WKWebView will drop the cookie. Native
+ * clients therefore carry a short-lived access token and exchange this for a
+ * new one when it expires.
+ *
+ * Three properties this table exists to provide:
+ *
+ *  - The token is stored HASHED. A leaked database must not hand over live
+ *    sessions, and unlike a password these are high-entropy random values, so
+ *    a single SHA-256 is enough — no salt or work factor needed.
+ *  - Each use ROTATES the token, so a stolen one has a short useful life.
+ *  - Tokens are grouped into a FAMILY. Presenting one that has already been
+ *    used means two parties hold it, which means it was stolen; the whole
+ *    family is revoked rather than trying to guess which holder is genuine.
+ */
+export const refreshTokens = pgTable(
+  'refresh_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** SHA-256 of the token. The token itself is shown once and never stored. */
+    tokenHash: text('token_hash').notNull(),
+    /** All tokens descended from one login. Revoked together on reuse. */
+    familyId: uuid('family_id').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    /** Set the moment it is exchanged. A second use is evidence of theft. */
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    hashIdx: uniqueIndex('refresh_tokens_hash_key').on(t.tokenHash),
+    familyIdx: index('refresh_tokens_family_idx').on(t.familyId),
+    userIdx: index('refresh_tokens_user_idx').on(t.userId),
+  }),
+);
+
 export const bankAccounts = pgTable(
   'bank_accounts',
   {

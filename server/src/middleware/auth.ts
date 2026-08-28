@@ -12,10 +12,21 @@ declare global {
   }
 }
 
-/** Attaches req.user when a valid session cookie is present. Never rejects. */
+/**
+ * Attaches req.user when the request carries a valid session. Never rejects.
+ *
+ * Two transports, one session. The browser sends an httpOnly cookie, which
+ * JavaScript cannot read and so cannot leak through XSS. A native client sends
+ * the same session as a bearer token, because an app served from its own origin
+ * makes every API call cross-site and WKWebView will not keep the cookie.
+ *
+ * The cookie is checked first: if a request somehow carries both, the browser's
+ * own credential is the one that counts.
+ */
 export async function loadUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
-  const sessionId = req.cookies?.[SESSION_COOKIE];
-  if (typeof sessionId === 'string' && sessionId.length > 0) {
+  const sessionId = sessionFromCookie(req) ?? sessionFromBearer(req);
+
+  if (sessionId) {
     const user = await resolveSession(sessionId);
     if (user) {
       req.user = user;
@@ -23,6 +34,18 @@ export async function loadUser(req: Request, _res: Response, next: NextFunction)
     }
   }
   next();
+}
+
+function sessionFromCookie(req: Request): string | null {
+  const value = req.cookies?.[SESSION_COOKIE];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function sessionFromBearer(req: Request): string | null {
+  const header = req.get('authorization') ?? '';
+  if (!header.startsWith('Bearer ')) return null;
+  const token = header.slice('Bearer '.length).trim();
+  return token.length > 0 ? token : null;
 }
 
 /** Gate for endpoints that move money or read private data. */

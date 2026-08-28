@@ -10,6 +10,10 @@ import {
   destroySession,
   destroyOtherSessions,
   hashPassword,
+  issueTokenPair,
+  RefreshError,
+  revokeRefreshToken,
+  rotateRefreshToken,
   verifyPassword,
 } from '../lib/auth.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -18,17 +22,31 @@ import { claimHandle, HandleError } from '../lib/handle.js';
 
 export const authRouter = Router();
 
+/**
+ * How the caller wants its session delivered.
+ *
+ * 'web' gets an httpOnly cookie, which JavaScript cannot read and so cannot
+ * leak through XSS. 'mobile' gets tokens in the body, because a native app is
+ * served from its own origin and the cookie would be dropped as third-party.
+ *
+ * Defaulting to web means a browser never receives a token in a readable body
+ * by accident.
+ */
+const clientSchema = z.enum(['web', 'mobile']).default('web');
+
 const signupSchema = z.object({
   email: z.string().email().max(255),
   password: z.string().min(10).max(200),
   displayName: z.string().min(1).max(80),
   /** Wallet opened on signup so the dashboard is never empty-stated. */
   currency: z.string().length(3).default('USD'),
+  client: clientSchema,
 });
 
 const loginSchema = z.object({
   email: z.string().email().max(255),
   password: z.string().min(1).max(200),
+  client: clientSchema,
 });
 
 const cookieOptions = {
@@ -37,6 +55,35 @@ const cookieOptions = {
   secure: process.env.NODE_ENV === 'production',
   path: '/',
 };
+
+/**
+ * Give the caller a session in the form it asked for.
+ *
+ * Web gets a cookie and nothing in the body. Mobile gets a token pair and no
+ * cookie — sending both would put a readable copy of the session in a browser
+ * that did not need one.
+ */
+async function grantSession(
+  res: import('express').Response,
+  userId: string,
+  client: 'web' | 'mobile',
+): Promise<{ tokens?: Record<string, string> }> {
+  if (client === 'mobile') {
+    const pair = await issueTokenPair(userId);
+    return {
+      tokens: {
+        accessToken: pair.accessToken,
+        accessExpiresAt: pair.accessExpiresAt.toISOString(),
+        refreshToken: pair.refreshToken,
+        refreshExpiresAt: pair.refreshExpiresAt.toISOString(),
+      },
+    };
+  }
+
+  const session = await createSession(userId);
+  res.cookie(SESSION_COOKIE, session.id, { ...cookieOptions, expires: session.expiresAt });
+  return {};
+}
 
 authRouter.post('/signup', async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
@@ -67,17 +114,15 @@ authRouter.post('/signup', async (req, res) => {
 
   await openWallet(created.id, parsed.data.currency);
 
-  const session = await createSession(created.id);
-  res.cookie(SESSION_COOKIE, session.id, { ...cookieOptions, expires: session.expiresAt });
-  res.status(201).json({
-    user: {
-      id: created.id,
-      payhiveId: created.payhiveId,
-      handle: null,
-      displayName: created.displayName,
-      email,
-    },
-  });
+  const user = {
+    id: created.id,
+    payhiveId: created.payhiveId,
+    handle: null,
+    displayName: created.displayName,
+    email,
+  };
+
+  res.status(201).json({ user, ...(await grantSession(res, created.id, parsed.data.client)) });
 });
 
 authRouter.post('/login', async (req, res) => {
@@ -102,8 +147,6 @@ authRouter.post('/login', async (req, res) => {
     return;
   }
 
-  const session = await createSession(user.id);
-  res.cookie(SESSION_COOKIE, session.id, { ...cookieOptions, expires: session.expiresAt });
   res.json({
     user: {
       id: user.id,
@@ -113,13 +156,58 @@ authRouter.post('/login', async (req, res) => {
       email: user.email,
       kycStatus: user.kycStatus,
     },
+    ...(await grantSession(res, user.id, parsed.data.client)),
   });
 });
 
 authRouter.post('/logout', async (req, res) => {
   if (req.sessionId) await destroySession(req.sessionId);
+
+  // A native client sends its refresh token too, or logging out would end the
+  // access token while leaving something that can mint a new one.
+  const presented = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+  if (typeof presented === 'string' && presented.length > 0) {
+    await revokeRefreshToken(presented);
+  }
+
   res.clearCookie(SESSION_COOKIE, cookieOptions);
   res.status(204).end();
+});
+
+const refreshSchema = z.object({ refreshToken: z.string().min(1).max(500) });
+
+/**
+ * Exchange a refresh token for a new pair.
+ *
+ * Deliberately not behind requireAuth: the whole point is that it is called
+ * when the access token has already expired.
+ */
+authRouter.post('/refresh', async (req, res) => {
+  const parsed = refreshSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res
+      .status(400)
+      .json({ error: { code: 'invalid_request', message: 'A refresh token is required.' } });
+    return;
+  }
+
+  try {
+    const pair = await rotateRefreshToken(parsed.data.refreshToken);
+    res.json({
+      tokens: {
+        accessToken: pair.accessToken,
+        accessExpiresAt: pair.accessExpiresAt.toISOString(),
+        refreshToken: pair.refreshToken,
+        refreshExpiresAt: pair.refreshExpiresAt.toISOString(),
+      },
+    });
+  } catch (error) {
+    if (error instanceof RefreshError) {
+      res.status(401).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    throw error;
+  }
 });
 
 authRouter.get('/me', requireAuth, (req, res) => {

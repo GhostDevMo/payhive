@@ -1,8 +1,16 @@
-import { randomBytes, randomInt, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomInt,
+  randomUUID,
+  scrypt,
+  timingSafeEqual,
+  type ScryptOptions,
+} from 'node:crypto';
 import { promisify } from 'node:util';
-import { and, eq, gt, ne } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { sessions, users } from '../db/schema.js';
+import { refreshTokens, sessions, users } from '../db/schema.js';
 
 // promisify() resolves to the 3-argument overload, which drops the options
 // object we need for the cost parameters. Assert the 4-argument shape.
@@ -23,6 +31,14 @@ const scryptAsync = promisify(scrypt) as (
 
 const SCRYPT_PARAMS = { N: 2 ** 15, r: 8, p: 1, keylen: 64 } as const;
 const SESSION_TTL_DAYS = 30;
+
+/**
+ * A native client's access token is deliberately short-lived. It is the thing
+ * kept in app storage on a device that might be lost, and the refresh token is
+ * what makes a short life cheap.
+ */
+const MOBILE_ACCESS_TTL_MINUTES = 30;
+const REFRESH_TTL_DAYS = 60;
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
@@ -94,11 +110,160 @@ export async function allocatePayhiveId(attempts = 5): Promise<string> {
 
 export const SESSION_COOKIE = 'payhive_session';
 
-export async function createSession(userId: string): Promise<{ id: string; expiresAt: Date }> {
+export async function createSession(
+  userId: string,
+  ttlMs = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+): Promise<{ id: string; expiresAt: Date }> {
   const id = randomBytes(32).toString('base64url');
-  const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + ttlMs);
   await db.insert(sessions).values({ id, userId, expiresAt });
   return { id, expiresAt };
+}
+
+// ---------------------------------------------------------------------------
+// Tokens for native clients
+// ---------------------------------------------------------------------------
+
+/**
+ * Hash a token for storage.
+ *
+ * A plain SHA-256 rather than scrypt: these are 32 random bytes, not something
+ * a person chose, so there is no dictionary to defend against and no reason to
+ * make verification expensive on every request.
+ */
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+export interface TokenPair {
+  accessToken: string;
+  accessExpiresAt: Date;
+  refreshToken: string;
+  refreshExpiresAt: Date;
+}
+
+/** Issue a fresh pair. Used at login, and again on every refresh. */
+export async function issueTokenPair(
+  userId: string,
+  familyId: string = randomUUID(),
+): Promise<TokenPair> {
+  const session = await createSession(userId, MOBILE_ACCESS_TTL_MINUTES * 60 * 1000);
+
+  const refreshToken = randomBytes(32).toString('base64url');
+  const refreshExpiresAt = new Date(Date.now() + REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000);
+
+  await db.insert(refreshTokens).values({
+    userId,
+    tokenHash: hashToken(refreshToken),
+    familyId,
+    expiresAt: refreshExpiresAt,
+  });
+
+  return {
+    accessToken: session.id,
+    accessExpiresAt: session.expiresAt,
+    refreshToken,
+    refreshExpiresAt,
+  };
+}
+
+export class RefreshError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = 'RefreshError';
+  }
+}
+
+/**
+ * Exchange a refresh token for a new pair.
+ *
+ * Presenting a token that has already been used means two parties hold it, and
+ * there is no way to tell which one is the real user. The whole family is
+ * revoked, so the thief and the victim are both signed out and the victim can
+ * sign in again with a password the thief does not have. Being logged out is
+ * survivable; someone else moving your money is not.
+ */
+export async function rotateRefreshToken(presented: string): Promise<TokenPair> {
+  const tokenHash = hashToken(presented);
+
+  const [row] = await db
+    .select()
+    .from(refreshTokens)
+    .where(eq(refreshTokens.tokenHash, tokenHash))
+    .limit(1);
+
+  if (!row) throw new RefreshError('That refresh token is not valid', 'invalid_refresh_token');
+
+  if (row.usedAt || row.revokedAt) {
+    await burnFamily(row.familyId, row.userId);
+    throw new RefreshError(
+      'That refresh token has already been used. Sign in again.',
+      'refresh_token_reused',
+    );
+  }
+
+  if (row.expiresAt <= new Date()) {
+    throw new RefreshError('That refresh token has expired', 'refresh_token_expired');
+  }
+
+  // Claim it with a conditional update rather than a read followed by a write.
+  // Two refreshes arriving together would both pass the check above; only one
+  // can win this, and the loser is treated as the reuse that it is.
+  const claimed = await db
+    .update(refreshTokens)
+    .set({ usedAt: new Date() })
+    .where(and(eq(refreshTokens.id, row.id), isNull(refreshTokens.usedAt)))
+    .returning({ id: refreshTokens.id });
+
+  if (claimed.length === 0) {
+    await burnFamily(row.familyId, row.userId);
+    throw new RefreshError(
+      'That refresh token has already been used. Sign in again.',
+      'refresh_token_reused',
+    );
+  }
+
+  return issueTokenPair(row.userId, row.familyId);
+}
+
+/**
+ * Revoke every token descended from one login, and every access token with it.
+ *
+ * Deliberately not inside a transaction that the caller then aborts: this has
+ * to survive the error that follows it. Revoking and then throwing from within
+ * one transaction rolls the revocation back, which leaves a stolen token
+ * working while the response says otherwise.
+ */
+async function burnFamily(familyId: string, userId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(refreshTokens)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)));
+
+    // Access tokens already exchanged from this family go too, or the thief
+    // keeps what they have until it expires.
+    await tx.delete(sessions).where(eq(sessions.userId, userId));
+  });
+}
+
+/** Sign a native client out: its access token and its whole refresh family. */
+export async function revokeRefreshToken(presented: string): Promise<void> {
+  const [row] = await db
+    .select({ familyId: refreshTokens.familyId })
+    .from(refreshTokens)
+    .where(eq(refreshTokens.tokenHash, hashToken(presented)))
+    .limit(1);
+
+  if (!row) return;
+
+  await db
+    .update(refreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(refreshTokens.familyId, row.familyId), isNull(refreshTokens.revokedAt)));
 }
 
 export interface SessionUser {

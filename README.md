@@ -60,7 +60,7 @@ the default `PAYMENT_PROVIDER=mock` deposits settle instantly, so the whole app
 is usable without a Stripe key or a webhook tunnel.
 
 ```bash
-npm test          # 94 tests, including concurrency and DB-level invariants
+npm test          # 104 tests, including concurrency and DB-level invariants
 npm run typecheck
 ```
 
@@ -256,6 +256,40 @@ web/
 
 PayHive IDs use Crockford base32 — no I, L, O or U — because people read these
 aloud and retype them.
+
+---
+
+## Sessions, on the web and on a phone
+
+One session, two transports. A browser gets an httpOnly cookie, which
+JavaScript cannot read and therefore cannot leak through XSS. A native client
+gets the same session as a bearer token, because an app served from
+`capacitor://localhost` makes every API call cross-site and WKWebView drops the
+cookie. The caller says which it wants with `client: "web" | "mobile"` on signup
+and login; web is the default, so a browser never receives a readable token by
+accident.
+
+A native access token lasts 30 minutes. That is short because it lives in
+storage on a device that can be lost, and short is cheap when a refresh token
+can mint another.
+
+**Refresh tokens rotate, and reuse is treated as theft.** Each one works once
+and is stored hashed, so a leaked database yields no live sessions. Presenting a
+token that has already been used means two parties hold it, and there is no way
+to tell which is the real user — so the whole family is revoked, along with
+every access token from that login. Both parties are signed out, and the genuine
+user signs back in with a password the thief does not have. Being logged out is
+survivable; someone else moving your money is not.
+
+CORS accepts the Capacitor origins by default. That is safe precisely because
+native clients authenticate with a bearer token rather than a cookie, so
+allowing the origin grants nothing a cookie would. `WEB_ORIGIN` takes a
+comma-separated list for deployed front ends.
+
+**Still to do before shipping a native build:** the client keeps tokens in
+`localStorage`, which is readable by anything running in the webview. That is a
+placeholder — `storeTokens()` in `web/src/lib/api.ts` is the single function to
+move onto the platform keychain, and everything else already goes through it.
 
 ---
 

@@ -26,9 +26,35 @@ app.set('json replacer', (_key: string, value: unknown) =>
   typeof value === 'bigint' ? value.toString() : value,
 );
 
+/**
+ * Allowed origins.
+ *
+ * A native shell does not have a normal web origin: Capacitor serves the app
+ * from capacitor://localhost on iOS and http://localhost on Android, and those
+ * are what arrive in the Origin header. They are listed by default because a
+ * native client authenticates with a bearer token rather than a cookie, so
+ * allowing them does not expose anything a cookie would.
+ *
+ * WEB_ORIGIN takes a comma-separated list for the deployed front ends.
+ */
+const ALLOWED_ORIGINS = [
+  ...(process.env.WEB_ORIGIN ?? 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  'capacitor://localhost',
+  'ionic://localhost',
+  'http://localhost',
+];
+
 app.use(
   cors({
-    origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
+    origin(origin, callback) {
+      // No Origin header at all: same-origin, curl, or a native HTTP client.
+      // There is no browser to protect in that case.
+      if (!origin) return callback(null, true);
+      callback(null, ALLOWED_ORIGINS.includes(origin));
+    },
     credentials: true,
   }),
 );

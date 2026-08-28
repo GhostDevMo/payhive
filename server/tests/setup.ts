@@ -15,7 +15,7 @@ import { db, pool } from '../src/db/index.js';
 beforeEach(async () => {
   await db.execute(sql`
     TRUNCATE TABLE postings, transactions, idempotency_keys, provider_events,
-                   sessions, accounts, retired_handles, bank_accounts, users
+                   sessions, refresh_tokens, accounts, retired_handles, bank_accounts, users
     RESTART IDENTITY CASCADE
   `);
 });
