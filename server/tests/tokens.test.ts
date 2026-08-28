@@ -184,3 +184,30 @@ describe('refreshing', () => {
     expect(me.body.user.payhiveId).not.toBe(alice.user.payhiveId);
   });
 });
+
+describe('origins a native shell actually sends', () => {
+  /**
+   * These are asserted because getting them wrong is invisible from a browser.
+   * Capacitor serves the app from its own origin, and the mismatch only ever
+   * appears as a CORS failure on a device — which is exactly how the missing
+   * https://localhost entry was found, after the web app had been working
+   * fine for days.
+   */
+  it.each([
+    'https://localhost', // Android, androidScheme 'https' (the default)
+    'capacitor://localhost', // iOS
+    'http://localhost', // Android, androidScheme 'http'
+  ])('allows %s', async (origin) => {
+    const response = await request(app).get('/health').set('Origin', origin).expect(200);
+    expect(response.headers['access-control-allow-origin']).toBe(origin);
+  });
+
+  it('does not allow an origin nobody configured', async () => {
+    const response = await request(app)
+      .get('/health')
+      .set('Origin', 'https://payhive.example.attacker')
+      .expect(200);
+
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+  });
+});
