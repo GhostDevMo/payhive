@@ -129,6 +129,42 @@ export const refreshTokens = pgTable(
   }),
 );
 
+/**
+ * Single-use links sent by email.
+ *
+ * One table for both password reset and email verification, because they are
+ * the same primitive: a secret that proves someone can read a mailbox, good
+ * once and not for long.
+ *
+ * The token is stored HASHED. These grant account access, so a leaked database
+ * must not contain working links. Like refresh tokens they are high-entropy
+ * random values, so a single SHA-256 is enough.
+ *
+ * `payload` carries what the token authorises but must not be trusted from the
+ * client — the address a verification link moves an account to lives here, not
+ * in the request that redeems it.
+ */
+export const authTokens = pgTable(
+  'auth_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** 'password_reset' | 'email_change' */
+    purpose: text('purpose').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    hashIdx: uniqueIndex('auth_tokens_hash_key').on(t.tokenHash),
+    userPurposeIdx: index('auth_tokens_user_purpose_idx').on(t.userId, t.purpose),
+  }),
+);
+
 export const bankAccounts = pgTable(
   'bank_accounts',
   {

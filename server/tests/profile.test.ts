@@ -46,36 +46,46 @@ describe('editing a profile', () => {
       .expect(403);
   });
 
-  it('changes the email when the password is given', async () => {
+  it('does not move the account until the new address is confirmed', async () => {
     const alice = await signUp('Alice');
     const next = `moved.${randomUUID().slice(0, 8)}@payhive.test`;
 
-    await alice.agent
+    const response = await alice.agent
       .patch('/auth/me')
       .send({ email: next, currentPassword: PASSWORD })
       .expect(200);
 
-    // The new address is the one that signs in.
-    await request(app).post('/auth/login').send({ email: next, password: PASSWORD }).expect(200);
+    expect(response.body.pendingEmail).toBeDefined();
+
+    // The old address still signs in, and the new one does not: a typo here
+    // must cost an undelivered email, not an account. Confirming the link is
+    // covered in reset.test.ts.
     await request(app)
       .post('/auth/login')
       .send({ email: alice.email, password: PASSWORD })
-      .expect(401);
+      .expect(200);
+    await request(app).post('/auth/login').send({ email: next, password: PASSWORD }).expect(401);
   });
 
   it('does not reveal whether an email already has an account', async () => {
     const alice = await signUp('Alice');
     const bob = await signUp('Bob');
 
-    const response = await alice.agent
+    // Indistinguishable from a free address: same status, same body shape. The
+    // difference is that no link is ever sent, so the change cannot complete.
+    const taken = await alice.agent
       .patch('/auth/me')
       .send({ email: bob.email, currentPassword: PASSWORD })
-      .expect(409);
+      .expect(200);
+    const free = await alice.agent
+      .patch('/auth/me')
+      .send({ email: `free.${randomUUID().slice(0, 8)}@payhive.test`, currentPassword: PASSWORD })
+      .expect(200);
 
-    // Deliberately vague: this endpoint must not become a way to check which
-    // addresses are registered.
-    expect(response.body.error.message).not.toContain('already');
-    expect(response.body.error.code).toBe('email_unavailable');
+    expect(Object.keys(taken.body).sort()).toEqual(Object.keys(free.body).sort());
+
+    // Bob still owns his address.
+    await request(app).post('/auth/login').send({ email: bob.email, password: PASSWORD }).expect(200);
   });
 
   it('rejects an update that changes nothing', async () => {

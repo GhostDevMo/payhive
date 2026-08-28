@@ -2,7 +2,13 @@ import { useState, type FormEvent } from 'react';
 import { ApiError, api, type User } from '../lib/api';
 import { Logo } from './Logo';
 
-export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
+export default function AuthScreen({
+  onAuthenticated,
+  onForgotPassword,
+}: {
+  onAuthenticated: (user: User) => void;
+  onForgotPassword: () => void;
+}) {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -129,6 +135,16 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (user
             <button type="submit" className="btn-primary w-full" disabled={busy}>
               {busy ? 'Working…' : mode === 'login' ? 'Sign in' : 'Create wallet'}
             </button>
+
+            {mode === 'login' && (
+              <button
+                type="button"
+                onClick={onForgotPassword}
+                className="w-full text-center text-xs font-medium text-slate-500 transition hover:text-hive-500"
+              >
+                Forgot your password?
+              </button>
+            )}
           </form>
         </div>
 

@@ -230,6 +230,15 @@ export const api = {
 
   login: (input: { email: string; password: string }) => authenticate('/auth/login', input),
 
+  requestPasswordReset: (email: string) =>
+    call<void>('/auth/password-reset/request', { method: 'POST', body: { email } }),
+
+  confirmPasswordReset: (input: { token: string; password: string }) =>
+    call<void>('/auth/password-reset/confirm', { method: 'POST', body: input }),
+
+  confirmEmailChange: (token: string) =>
+    call<{ email: string }>('/auth/email/confirm', { method: 'POST', body: { token } }),
+
   logout: async () => {
     const current = tokens;
     await call<void>('/auth/logout', {
@@ -256,7 +265,10 @@ export const api = {
     call<{ handle: string }>('/auth/me/handle', { method: 'PUT', body: { handle } }),
 
   updateProfile: (input: { displayName?: string; email?: string; currentPassword?: string }) =>
-    call<{ user: User }>('/auth/me', { method: 'PATCH', body: input }),
+    call<{ user: User; pendingEmail?: { message: string } }>('/auth/me', {
+      method: 'PATCH',
+      body: input,
+    }),
 
   changePassword: (input: { currentPassword: string; newPassword: string }) =>
     call<void>('/auth/me/password', { method: 'PUT', body: input }),

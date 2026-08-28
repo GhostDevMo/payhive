@@ -53,4 +53,23 @@ services:
       - key: ADMIN_TOKEN
         generateValue: true
 
+      # Encrypts stored bank-link credentials. Generated once and kept; losing
+      # it makes every linked account unreadable.
+      - key: SECRETS_KEY
+        generateValue: true
+
+      # Where emailed links point. Set to this service's own URL, or password
+      # reset links will send people to localhost.
+      - key: APP_URL
+        sync: false
+
+      # console prints to the log and sends nothing. Switch to resend once a
+      # domain is verified, and set RESEND_API_KEY and EMAIL_FROM alongside it.
+      - key: EMAIL_PROVIDER
+        value: console
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+
     # PORT is supplied by Render and read by server/src/index.ts.

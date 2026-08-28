@@ -60,7 +60,7 @@ the default `PAYMENT_PROVIDER=mock` deposits settle instantly, so the whole app
 is usable without a Stripe key or a webhook tunnel.
 
 ```bash
-npm test          # 104 tests, including concurrency and DB-level invariants
+npm test          # 123 tests, including concurrency and DB-level invariants
 npm run typecheck
 ```
 
@@ -300,11 +300,48 @@ targets Node 20. Moving both together is the upgrade when it is wanted.
 
 ---
 
-## Getting back into an account
+## Password reset and email confirmation
 
-There is **no password reset yet**. It needs somewhere to send an email, and no
-email provider is wired up, so until then a forgotten password is an operator
-task rather than a self-service one:
+Both are the same primitive: a single-use secret emailed to an address, which
+proves the holder can read that mailbox.
+
+```
+EMAIL_PROVIDER=console   prints the message to the terminal; no account needed
+EMAIL_PROVIDER=resend    sends for real
+```
+
+The console provider is not a stub of the flow — the link it prints is a real
+one and works. That keeps the whole path exercisable in development and in CI
+without an email account, which is the same bargain the mock payment and bank
+providers make.
+
+Resend was chosen for being transactional-first with a free tier that needs no
+card, and a plain HTTP API rather than an SDK. It sits behind `EmailProvider`,
+so replacing it is one file.
+
+**What the flows guarantee**
+
+- **Asking for a reset never reveals whether an account exists.** Always 204,
+  and nothing is sent for an unknown address. A reset form that answers
+  honestly is an account-enumeration oracle, and the customer list of a payment
+  product is worth stealing on its own.
+- **Tokens are stored hashed, expire in an hour, and work once.** Redeeming one
+  invalidates every other outstanding link for that account.
+- **Completing a reset signs out every session.** If the reason for the reset is
+  that someone else had the password, leaving their session alive defeats it.
+- **Requests are rate limited per account**, so the endpoint cannot be used to
+  bury someone in mail.
+
+**Changing an email address does not change it.** A link goes to the *new*
+address and the account moves only when it is opened, so a typo costs an
+undelivered email rather than an account nobody can recover. The old address is
+told at the same time, because losing an account should never be silent. If the
+new address already belongs to someone else, the request succeeds identically
+and no link is ever sent — the difference is invisible to the caller.
+
+### If nobody can reach the mailbox
+
+Operator commands, unchanged and still useful when email is not an option:
 
 ```bash
 npm run user:list                                   # which accounts exist
@@ -312,11 +349,8 @@ npm run user:password -- someone@example.com        # prompts for a new one
 ```
 
 Both run against whatever `DATABASE_URL` is set, so point them at the
-environment you actually mean — a local `.env` and a deployed database are
-different places, and an account existing in one says nothing about the other.
-The new password is read from stdin rather than passed as an argument, so it
-does not land in shell history, and every existing session for that user is
-signed out, on the same reasoning as changing a password in the app.
+environment you mean — a local `.env` and a deployed database are different
+places, and an account existing in one says nothing about the other.
 
 Note that the tests truncate every table between runs. Any account created in
 the local development database is gone the next time `npm test` runs; this is

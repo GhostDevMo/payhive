@@ -80,7 +80,7 @@ function DetailsCard({
   const [email, setEmail] = useState(user.email);
   const [currentPassword, setCurrentPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const emailChanged = email.trim().toLowerCase() !== user.email.toLowerCase();
@@ -92,7 +92,7 @@ function DetailsCard({
     if (saving || !dirty) return;
     setSaving(true);
     setError(null);
-    setSaved(false);
+    setSaved(null);
 
     try {
       const result = await api.updateProfile({
@@ -101,7 +101,10 @@ function DetailsCard({
       });
       onUserChanged(result.user);
       setCurrentPassword('');
-      setSaved(true);
+      // The email does not move until the link in it is opened, so say that
+      // rather than "Saved", which would be a lie the user acts on.
+      setSaved(result.pendingEmail?.message ?? 'Saved.');
+      if (result.pendingEmail) setEmail(result.user.email);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not save your details.');
     } finally {
@@ -163,7 +166,7 @@ function DetailsCard({
         )}
 
         {error && <p className="text-xs text-rose-400">{error}</p>}
-        {saved && <p className="text-xs text-emerald-400">Saved.</p>}
+        {saved && <p className="text-xs text-emerald-400">{saved}</p>}
 
         <button type="submit" disabled={!dirty || saving} className="btn-primary">
           {saving ? 'Saving…' : 'Save changes'}

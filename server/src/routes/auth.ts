@@ -19,6 +19,13 @@ import {
 import { requireAuth } from '../middleware/auth.js';
 import { openWallet } from '../lib/wallet.js';
 import { claimHandle, HandleError } from '../lib/handle.js';
+import {
+  completeEmailChange,
+  completePasswordReset,
+  requestEmailChange,
+  requestPasswordReset,
+  VerificationError,
+} from '../lib/verification.js';
 
 export const authRouter = Router();
 
@@ -292,6 +299,10 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
   const changes: { displayName?: string; email?: string } = {};
   if (displayName !== undefined) changes.displayName = displayName;
 
+  // The email is NOT changed here. A link goes to the new address and the
+  // account moves only when that link is opened, so a typo costs a
+  // non-delivery rather than an account nobody can recover.
+  let emailPending = false;
   if (email !== undefined && email.toLowerCase() !== me.email) {
     if (!currentPassword || !(await verifyPassword(currentPassword, me.passwordHash))) {
       res.status(403).json({
@@ -300,26 +311,23 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
       return;
     }
 
-    const [taken] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.email, email.toLowerCase()))
-      .limit(1);
-
-    if (taken && taken.id !== me.id) {
-      // Same wording whether or not the address is in use: this endpoint must
-      // not become a way to test which emails have PayHive accounts.
-      res.status(409).json({
-        error: { code: 'email_unavailable', message: 'That email cannot be used.' },
-      });
-      return;
+    try {
+      await requestEmailChange(me.id, email);
+      emailPending = true;
+    } catch (error) {
+      if (error instanceof VerificationError) {
+        res.status(error.status).json({ error: { code: error.code, message: error.message } });
+        return;
+      }
+      throw error;
     }
-    changes.email = email.toLowerCase();
   }
 
   const [updated] = await db
     .update(users)
-    .set(changes)
+    // Always a write, even when only the email was requested: the returning
+    // clause is what gives the client the current state back.
+    .set(Object.keys(changes).length > 0 ? changes : { displayName: me.displayName })
     .where(eq(users.id, req.user!.id))
     .returning({
       id: users.id,
@@ -330,7 +338,16 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
       kycStatus: users.kycStatus,
     });
 
-  res.json({ user: updated });
+  res.json({
+    user: updated,
+    ...(emailPending
+      ? {
+          pendingEmail: {
+            message: 'Check the new address for a link to confirm the change.',
+          },
+        }
+      : {}),
+  });
 });
 
 const passwordSchema = z.object({
@@ -369,4 +386,81 @@ authRouter.put('/me/password', requireAuth, async (req, res) => {
 
   await destroyOtherSessions(req.user!.id, req.sessionId!);
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// Password reset and email confirmation
+// ---------------------------------------------------------------------------
+
+const resetRequestSchema = z.object({ email: z.string().email().max(255) });
+
+/**
+ * Ask for a reset link.
+ *
+ * Always 204, whether or not the address has an account. Answering honestly
+ * would turn this into a way to discover who banks with PayHive, and the list
+ * of a payment product's customers is worth stealing on its own.
+ */
+authRouter.post('/password-reset/request', async (req, res) => {
+  const parsed = resetRequestSchema.safeParse(req.body);
+  if (parsed.success) {
+    try {
+      await requestPasswordReset(parsed.data.email);
+    } catch (error) {
+      // A provider outage must not become an oracle either: the caller sees
+      // the same 204 regardless, and the failure is logged for us.
+      console.error('[payhive] password reset email failed', error);
+    }
+  }
+  res.status(204).end();
+});
+
+const resetConfirmSchema = z.object({
+  token: z.string().min(1).max(500),
+  password: z.string().min(10).max(200),
+});
+
+authRouter.post('/password-reset/confirm', async (req, res) => {
+  const parsed = resetConfirmSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: {
+        code: 'invalid_request',
+        message: 'A reset link and a password of at least 10 characters are required.',
+      },
+    });
+    return;
+  }
+
+  try {
+    await completePasswordReset(parsed.data.token, parsed.data.password);
+    res.status(204).end();
+  } catch (error) {
+    if (error instanceof VerificationError) {
+      res.status(error.status).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    throw error;
+  }
+});
+
+const verifySchema = z.object({ token: z.string().min(1).max(500) });
+
+/** Confirm a new email address. Not behind requireAuth: the link may be opened anywhere. */
+authRouter.post('/email/confirm', async (req, res) => {
+  const parsed = verifySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { code: 'invalid_request', message: 'A link is required.' } });
+    return;
+  }
+
+  try {
+    res.json({ email: await completeEmailChange(parsed.data.token) });
+  } catch (error) {
+    if (error instanceof VerificationError) {
+      res.status(error.status).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    throw error;
+  }
 });
