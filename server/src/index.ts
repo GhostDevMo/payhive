@@ -42,9 +42,15 @@ const ALLOWED_ORIGINS = [
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
+  // What a Capacitor shell actually sends as its Origin. Android with
+  // androidScheme 'https' — the recommended setting — reports https://localhost,
+  // not capacitor://; iOS reports capacitor://localhost. Both are listed
+  // because guessing wrong shows up as a CORS failure on a device and nowhere
+  // else.
   'capacitor://localhost',
   'ionic://localhost',
   'http://localhost',
+  'https://localhost',
 ];
 
 app.use(

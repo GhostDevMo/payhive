@@ -259,6 +259,47 @@ aloud and retype them.
 
 ---
 
+## The mobile build
+
+Capacitor wraps the same web client in a native shell. `web/android/` is a real
+Android project and is committed; iOS needs a Mac and is not added here.
+
+```bash
+npm run mobile:sync     # build the web client and copy it into the native project
+npm run mobile:open     # open Android Studio
+```
+
+**`VITE_API_URL` is required for native builds.** On the web the app and API
+share an origin and `/api` is relative; in a shell there is no shared origin, so
+the client needs an absolute URL:
+
+```bash
+cd web
+VITE_API_URL=https://your-api.example.com npm run build
+npx cap sync android
+```
+
+A debug APK from the command line, using Android Studio's bundled JDK:
+
+```bash
+cd web/android && JAVA_HOME="C:\Program Files\Android\Android Studio\jbr" ./gradlew assembleDebug
+```
+
+**Test against a real host over HTTPS.** The app is served from
+`https://localhost` inside the WebView, so a plain-HTTP API is refused as mixed
+content no matter what the Android network config permits — and
+`allowMixedContent` stays off, because a wallet has no business accepting a
+downgrade. Point a device at staging rather than at a laptop.
+
+That origin is also why `https://localhost` is in the CORS allowlist: it is what
+Android actually sends, and getting it wrong shows up as a CORS failure on a
+device and nowhere else.
+
+Capacitor is pinned to v7 because v8's CLI requires Node 22 and this project
+targets Node 20. Moving both together is the upgrade when it is wanted.
+
+---
+
 ## Sessions, on the web and on a phone
 
 One session, two transports. A browser gets an httpOnly cookie, which

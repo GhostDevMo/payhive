@@ -7,9 +7,16 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "mobile:sync": "npm run build && cap sync",
+    "mobile:open": "cap open android",
+    "mobile:apk": "cap sync android && cd android && gradlew.bat assembleDebug"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^7.1.6",
+    "@capacitor/android": "^7.6.8",
+    "@capacitor/cli": "^7.6.8",
+    "@capacitor/core": "^7.6.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

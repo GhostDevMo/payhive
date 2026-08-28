@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, api, type User } from './lib/api';
+import { ApiError, api, hydrateSession, type User } from './lib/api';
 import AuthScreen from './components/AuthScreen';
 import Dashboard from './components/Dashboard';
 import Profile from './components/Profile';
@@ -14,8 +14,10 @@ export default function App() {
   const [currency, setCurrency] = useState('USD');
 
   useEffect(() => {
-    api
-      .me()
+    // A native launch restores its saved session before asking who we are;
+    // on the web this resolves immediately and the cookie does the work.
+    hydrateSession()
+      .then(() => api.me())
       .then((r) => setUser(r.user))
       .catch((error) => {
         // A 401 here is the normal signed-out case, not a failure worth showing.

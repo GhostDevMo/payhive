@@ -15,7 +15,9 @@
     "test": "npm run test --workspace=@payhive/server",
     "typecheck": "npm run typecheck --workspace=@payhive/server && npm run typecheck --workspace=@payhive/web",
     "build": "npm run build --workspace=@payhive/server && npm run build --workspace=@payhive/web",
-    "start": "npm run start --workspace=@payhive/server"
+    "start": "npm run start --workspace=@payhive/server",
+    "mobile:sync": "npm run mobile:sync --workspace=@payhive/web",
+    "mobile:open": "npm run mobile:open --workspace=@payhive/web"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
